@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock
 
-from integrations.lightnav_sonic_emerge.navigation_backend import (
-    NavigationBackend,
-    NavigationConfig,
-)
-from integrations.lightnav_sonic_emerge.observation_writer import EgoObservationWriter
+from integrations.lightnav_sonic_emerge import navigation_backend
 
 
 class _SequenceSource:
+
     def __init__(self, values):
         self.values = list(values)
         self.closed = False
@@ -26,6 +24,7 @@ class _SequenceSource:
 
 
 class _Publisher:
+
     def __init__(self):
         self.activated = False
         self.commands = []
@@ -46,6 +45,7 @@ class _Publisher:
 
 
 class _Client:
+
     def __init__(self, replies):
         self.replies = list(replies)
         self.connected = False
@@ -64,6 +64,7 @@ class _Client:
 
 
 class _Adapter:
+
     def convert_or_idle(self, waypoint, yaw):
         return SimpleNamespace(mode=1, waypoint=waypoint, yaw=yaw)
 
@@ -72,6 +73,7 @@ class _Adapter:
 
 
 class _Writer:
+
     def __init__(self):
         self.images = []
 
@@ -84,15 +86,22 @@ def _reply(*, stop=False, waypoint=(0.2, 0.0, 0.0)):
 
 
 class NavigationBackendTest(unittest.TestCase):
-    def _backend(self, camera, yaw, publisher, client, writer=None, **config_overrides):
+
+    def _backend(self,
+                 camera,
+                 yaw,
+                 publisher,
+                 client,
+                 writer=None,
+                 **config_overrides):
         values = dict(
             lightnav_server="ws://test:8051",
             control_hz=1000.0,
             max_stale_ticks=2,
         )
         values.update(config_overrides)
-        return NavigationBackend(
-            NavigationConfig(**values),
+        return navigation_backend.NavigationBackend(
+            navigation_backend.NavigationConfig(**values),
             writer or _Writer(),
             camera_factory=lambda *_: camera,
             yaw_factory=lambda *_: yaw,
@@ -108,16 +117,17 @@ class NavigationBackendTest(unittest.TestCase):
         publisher = _Publisher()
         client = _Client([_reply(stop=True)])
         writer = _Writer()
-        result = self._backend(camera, yaw, publisher, client, writer).run(
-            instruction="go to the table", max_steps=5
-        )
+        result = self._backend(camera, yaw, publisher, client,
+                               writer).run(instruction="go to the table",
+                                           max_steps=5)
 
         self.assertEqual(result.status, "completed")
         self.assertEqual(result.reason, "lightnav_stop")
         self.assertTrue(result.lightnav_stop)
         self.assertEqual(writer.images, [b"jpeg"])
         self.assertGreaterEqual(len(publisher.idles), 1)
-        self.assertTrue(camera.closed and yaw.closed and publisher.closed and client.closed)
+        self.assertTrue(camera.closed and yaw.closed and publisher.closed and
+                        client.closed)
 
     def test_budget_exhaustion_is_bounded(self) -> None:
         publisher = _Publisher()
@@ -151,7 +161,7 @@ class NavigationBackendTest(unittest.TestCase):
         self.assertEqual(result.reason, "user stop")
         self.assertEqual(result.ticks, 0)
         self.assertFalse(publisher.commands)
-        self.assertGreaterEqual(len(publisher.idles), 1)
+        self.assertFalse(publisher.activated)
 
     def test_repeated_stale_input_fails_closed(self) -> None:
         publisher = _Publisher()
@@ -180,3 +190,70 @@ class NavigationBackendTest(unittest.TestCase):
             )
             backend.run(instruction="walk forward", max_steps=1)
             self.assertTrue(backend.config.elastic_band_release_file.exists())
+
+    def test_cancel_during_inference_discards_late_command(self):
+        publisher = _Publisher()
+        client = _Client([_reply()])
+        cancelled = False
+
+        def predict(*_):
+            nonlocal cancelled
+            cancelled = True
+            return _reply()
+
+        client.predict = predict
+        result = self._backend(_SequenceSource([b"jpeg"]),
+                               _SequenceSource([0.0]), publisher,
+                               client).run(instruction="walk",
+                                           max_steps=3,
+                                           cancel_check=lambda: "user stop"
+                                           if cancelled else None)
+        self.assertEqual(result.status, "cancelled")
+        self.assertFalse(publisher.commands)
+        self.assertTrue(publisher.idles)
+        self.assertTrue(client.closed and publisher.closed)
+
+    def test_deadline_during_inference_discards_late_command(self):
+        publisher = _Publisher()
+        client = _Client([_reply()])
+        now = [0.0]
+
+        def predict(*_):
+            now[0] = 2.0
+            return _reply()
+
+        client.predict = predict
+        backend = self._backend(_SequenceSource([b"jpeg"]),
+                                _SequenceSource([0.0]),
+                                publisher,
+                                client,
+                                max_runtime_s=1.0)
+        backend._monotonic = lambda: now[0]
+        result = backend.run(instruction="walk", max_steps=3)
+        self.assertEqual((result.status, result.reason),
+                         ("budget_exhausted", "max_runtime_s"))
+        self.assertFalse(publisher.commands)
+        self.assertTrue(publisher.idles)
+
+    def test_failed_login_does_not_activate_planner(self):
+        publisher = _Publisher()
+        client = _Client([_reply()])
+        client.connect = Mock(side_effect=TimeoutError("login timeout"))
+        result = self._backend(_SequenceSource([b"jpeg"]),
+                               _SequenceSource([0.0]), publisher,
+                               client).run(instruction="walk", max_steps=3)
+        self.assertEqual(result.status, "failed")
+        self.assertFalse(publisher.activated)
+        self.assertTrue(client.closed)
+
+    def test_inference_timeout_sends_idle_and_releases_resources(self):
+        publisher = _Publisher()
+        client = _Client([_reply()])
+        client.predict = Mock(side_effect=TimeoutError("prediction timeout"))
+        result = self._backend(_SequenceSource([b"jpeg"]),
+                               _SequenceSource([0.0]), publisher,
+                               client).run(instruction="walk", max_steps=3)
+        self.assertEqual(result.status, "failed")
+        self.assertFalse(publisher.commands)
+        self.assertTrue(publisher.idles)
+        self.assertTrue(client.closed and publisher.closed)

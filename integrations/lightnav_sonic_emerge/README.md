@@ -19,6 +19,18 @@ directory so a clone of this branch contains all integration code.
 > guarantee or a real-robot release. Main-Agent planning has not yet been
 > evaluated end to end.
 
+## Branches and the 2026-10-16 cleanup
+
+`humanoid-dev` contains simulation work. `real-dev` starts from the cleaned
+simulation baseline and is reserved for future hardware deployment; this
+cleanup adds no real-robot deployment implementation.
+
+The latest apple-table simulation tools have been consolidated from the lab's
+LightNav checkout into `bridge/`, with their checks in `simulation_checks/`.
+See [the simulation guide](SIMULATION.md) for the current entry points and
+[the Chinese handover](../../apply_docs/06_仿真代码整理与分支约定.md) for the
+paper/code mapping, source inventory, API-version differences, and branch scope.
+
 ## System architecture
 
 ```text
@@ -223,7 +235,10 @@ python -m unittest discover \
   -s integrations/lightnav_sonic_emerge/checks -v
 ```
 
-Expected result: **41 tests pass**.
+Expected result: **50 tests pass**. Apple-table tests use a separate MuJoCo
+Python environment; see [SIMULATION.md](SIMULATION.md). The core checks include
+an offline Agent-tool → queue → driver → result round trip. They do not run an
+LLM planner or a real checkpoint.
 
 ## End-to-end ProcTHOR run
 
@@ -399,7 +414,14 @@ process-level shutdown command.
 - Run only one planner publisher on port 5556.
 - The action ceiling defaults to 120 ticks and rejects larger requests unless
   the driver configuration is deliberately changed.
-- Every action exit path attempts to send SONIC locomotion `IDLE`.
+- Every action exit path after planner activation attempts to send SONIC locomotion `IDLE`.
+- `max_runtime_s` defaults to 120 seconds and cannot exceed driver configuration
+  `max_action_runtime_s` (also 120 by default). The optional action parameter
+  can reduce the budget. `inference_timeout_s` (driver config, default 10)
+  bounds each model operation; expiry is checked between synchronous operations,
+  so it is not a real-time preemption deadline.
+- Model login completes before planner activation; cancellation and runtime are
+  checked again after prediction so late results cannot restart motion.
 - `LightNav stop=true` means the policy requested termination; it does not prove
   that the language goal is satisfied. Verify the latest observation.
 - The Elastic Band release file is per MuJoCo episode. Delete it before a new
@@ -429,7 +451,8 @@ process-level shutdown command.
 - Put integration changes and tests in this directory.
 - Do not commit checkpoints, engines, generated MJCF, observations, API keys, or
   local workspace state.
-- Run the 41 offline checks before opening a pull request.
+- Run the core checks and the separate apple-table simulation checks before opening a pull request.
+- Format integration Python using `.style.yapf` (Google, 80 columns), and run Ruff with the local `ruff.toml`.
 - Report the upstream revisions, GPU, instruction, tick budget, and whether a
   result used manual enqueue or a Main Agent.
 

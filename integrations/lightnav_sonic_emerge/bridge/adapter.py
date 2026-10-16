@@ -10,11 +10,12 @@ SONIC installed.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
 import math
+from dataclasses import asdict
+from dataclasses import dataclass
 from numbers import Real
-from typing import Any, Sequence
-
+from typing import Any
+from typing import Sequence
 
 SONIC_IDLE_MODE = 0
 SONIC_SLOW_WALK_MODE = 1
@@ -43,9 +44,14 @@ class AdapterLimits:
             "position_tolerance_m": self.position_tolerance_m,
             "yaw_tolerance_rad": self.yaw_tolerance_rad,
         }
-        invalid = [name for name, value in positive.items() if not math.isfinite(value) or value <= 0.0]
+        invalid = [
+            name for name, value in positive.items()
+            if not math.isfinite(value) or value <= 0.0
+        ]
         if invalid:
-            raise ValueError(f"adapter limits must be finite and positive: {', '.join(invalid)}")
+            raise ValueError(
+                f"adapter limits must be finite and positive: {', '.join(invalid)}"
+            )
 
 
 @dataclass(frozen=True)
@@ -96,7 +102,10 @@ class LightNav2SonicAdapter:
     def __init__(self, limits: AdapterLimits | None = None) -> None:
         self.limits = limits or AdapterLimits()
 
-    def idle(self, robot_yaw_rad: float | None = None, *, reason: str) -> SonicPlannerCommand:
+    def idle(self,
+             robot_yaw_rad: float | None = None,
+             *,
+             reason: str) -> SonicPlannerCommand:
         """Return an explicit SONIC locomotion-IDLE command.
 
         A unit facing vector is still supplied because SONIC validates it even
@@ -120,7 +129,8 @@ class LightNav2SonicAdapter:
             reason=reason,
         )
 
-    def convert(self, waypoint: Sequence[float], robot_yaw_rad: float) -> SonicPlannerCommand:
+    def convert(self, waypoint: Sequence[float],
+                robot_yaw_rad: float) -> SonicPlannerCommand:
         """Convert one valid local waypoint.
 
         ``robot_yaw_rad`` is the current yaw in SONIC's world frame.  The
@@ -136,11 +146,10 @@ class LightNav2SonicAdapter:
         robot_yaw = _finite_scalar(robot_yaw_rad, "robot_yaw_rad")
 
         translation_m = math.hypot(forward_m, lateral_m)
-        if (
-            translation_m < self.limits.position_tolerance_m
-            and abs(delta_yaw_rad) < self.limits.yaw_tolerance_rad
-        ):
-            return self.idle(robot_yaw, reason="first waypoint is within stop tolerances")
+        if (translation_m < self.limits.position_tolerance_m and
+                abs(delta_yaw_rad) < self.limits.yaw_tolerance_rad):
+            return self.idle(robot_yaw,
+                             reason="first waypoint is within stop tolerances")
 
         applied_delta_yaw = _clip(
             delta_yaw_rad,
@@ -191,21 +200,25 @@ class LightNav2SonicAdapter:
             # This path is defensive: a non-zero translation should not become
             # zero after finite clipping, but an explicit stop is safer than a
             # malformed direction should it happen.
-            return self.idle(robot_yaw, reason="clipped waypoint has zero planar velocity")
+            return self.idle(robot_yaw,
+                             reason="clipped waypoint has zero planar velocity")
 
         return SonicPlannerCommand(
             mode=SONIC_SLOW_WALK_MODE,
-            movement_direction=(world_vx / world_speed, world_vy / world_speed, 0.0),
+            movement_direction=(world_vx / world_speed, world_vy / world_speed,
+                                0.0),
             facing_direction=facing,
             movement_speed=speed,
             height=-1.0,
             reason="tracked first LightNav waypoint",
         )
 
-    def convert_or_idle(self, waypoint: Sequence[float], robot_yaw_rad: float) -> SonicPlannerCommand:
+    def convert_or_idle(self, waypoint: Sequence[float],
+                        robot_yaw_rad: float) -> SonicPlannerCommand:
         """Fail closed for untrusted LightNav output or stale pose data."""
 
         try:
             return self.convert(waypoint, robot_yaw_rad)
         except (TypeError, ValueError, OverflowError) as exc:
-            return self.idle(robot_yaw_rad, reason=f"invalid LightNav waypoint: {exc}")
+            return self.idle(robot_yaw_rad,
+                             reason=f"invalid LightNav waypoint: {exc}")

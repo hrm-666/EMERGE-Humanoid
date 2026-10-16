@@ -5,11 +5,9 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from Emerge.utils.action_queue import (
-    append_action,
-    pending_action_type,
-    update_action_document,
-)
+from Emerge.utils.action_queue import append_action
+from Emerge.utils.action_queue import pending_action_type
+from Emerge.utils.action_queue import update_action_document
 
 
 def enqueue(

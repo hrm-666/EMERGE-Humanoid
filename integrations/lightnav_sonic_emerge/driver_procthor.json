@@ -12,5 +12,7 @@
   "default_max_steps": 120,
   "max_action_steps": 120,
   "elastic_band_release_file": "/tmp/lightnav_sonic_release",
-  "publish_observations": true
+  "publish_observations": true,
+  "inference_timeout_s": 10.0,
+  "max_action_runtime_s": 120.0
 }

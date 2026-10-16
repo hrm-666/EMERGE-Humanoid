@@ -1,0 +1,116 @@
+{
+  "date": "2026-10-16",
+  "note": "Simulation sources consolidated from the laboratory checkout; imports and repository/model roots adapted. Source checkout retained. No hardware camera or real-robot runner migrated.",
+  "files": [
+    {
+      "source": "/home/embodied/LightNav-0/lightnav_sonic_bridge/tabletop.py",
+      "sha256": "9c62ffef608ba802e13f81b13b00b6db1e04457b1f9dfce2e826c2f2578867a8",
+      "destination": "integrations/lightnav_sonic_emerge/bridge/tabletop.py"
+    },
+    {
+      "source": "/home/embodied/LightNav-0/lightnav_sonic_bridge/tabletop_evaluate.py",
+      "sha256": "d939400687684d96e5ea7c1bcedae52d33e8e9757b616eb7a0e7057251411397",
+      "destination": "integrations/lightnav_sonic_emerge/bridge/tabletop_evaluate.py"
+    },
+    {
+      "source": "/home/embodied/LightNav-0/lightnav_sonic_bridge/tabletop_logging.py",
+      "sha256": "4cfef8d8337b6dcef143efbced9db6fb23c3d7735783cbfd860b63f26bb0b069",
+      "destination": "integrations/lightnav_sonic_emerge/bridge/tabletop_logging.py"
+    },
+    {
+      "source": "/home/embodied/LightNav-0/lightnav_sonic_bridge/tabletop_pose.py",
+      "sha256": "71f3d921cee7379aed4ecff4cfbcb5a1b8c2d8d5b2c0f493ab0fd413fe845e6d",
+      "destination": "integrations/lightnav_sonic_emerge/bridge/tabletop_pose.py"
+    },
+    {
+      "source": "/home/embodied/LightNav-0/lightnav_sonic_bridge/tabletop_recording.py",
+      "sha256": "46434bbcb03e479d0c720d103bd0e84f8ce3adc1d20cbe7cf218ea2fd2f3f97a",
+      "destination": "integrations/lightnav_sonic_emerge/bridge/tabletop_recording.py"
+    },
+    {
+      "source": "/home/embodied/LightNav-0/lightnav_sonic_bridge/tabletop_reset.py",
+      "sha256": "4c65157a0226d809f96f0361002ea552b46d376b6b2e6cc7068b2da5b29d220f",
+      "destination": "integrations/lightnav_sonic_emerge/bridge/tabletop_reset.py"
+    },
+    {
+      "source": "/home/embodied/LightNav-0/lightnav_sonic_bridge/tabletop_sim.py",
+      "sha256": "f8c9b0e2530e843c1bccc9476b013b4b0848be6680ae7a94e35d55b17c14059b",
+      "destination": "integrations/lightnav_sonic_emerge/bridge/tabletop_sim.py"
+    },
+    {
+      "source": "/home/embodied/LightNav-0/lightnav_sonic_bridge/tabletop_start.py",
+      "sha256": "f116c9326b8cbf615a99a0b531dd39baa3b10adbf8b4db95fd7ab17f8a42e8b4",
+      "destination": "integrations/lightnav_sonic_emerge/bridge/tabletop_start.py"
+    },
+    {
+      "source": "/home/embodied/LightNav-0/lightnav_sonic_bridge/tabletop_video.py",
+      "sha256": "3b90adb8d2d9b16233362d989ea30f292bb9fcfb37d05e78f6709a036233c149",
+      "destination": "integrations/lightnav_sonic_emerge/bridge/tabletop_video.py"
+    },
+    {
+      "source": "/home/embodied/LightNav-0/lightnav_sonic_bridge/local_tabletop.py",
+      "sha256": "bb16109d4e6530d46d4df6a77ea76fb0ee69e113261f02cc1dc3555840a79f32",
+      "destination": "integrations/lightnav_sonic_emerge/bridge/local_tabletop.py"
+    },
+    {
+      "source": "/home/embodied/LightNav-0/lightnav_sonic_bridge/official01_observation.py",
+      "sha256": "a0f0568e92a20f30d18c15748df9b3e886b74b917f17093318d42ff42802277a",
+      "destination": "integrations/lightnav_sonic_emerge/bridge/official01_observation.py"
+    },
+    {
+      "source": "/home/embodied/LightNav-0/lightnav_sonic_bridge/ego_viewer.py",
+      "sha256": "64432dd086f4e187eb00b35ffcb5ed06870af8738e10900341dd1d54978d6e1a",
+      "destination": "integrations/lightnav_sonic_emerge/bridge/ego_viewer.py"
+    },
+    {
+      "source": "/home/embodied/LightNav-0/tests/lightnav_sonic/test_ego_viewer.py",
+      "sha256": "23b9abf3c9aa009fe1eabaf4216a5ee96067dbadfd3cbd92117a9741d039a6b9",
+      "destination": "integrations/lightnav_sonic_emerge/simulation_checks/test_ego_viewer.py"
+    },
+    {
+      "source": "/home/embodied/LightNav-0/tests/lightnav_sonic/test_local_tabletop.py",
+      "sha256": "d582c072d3849d47ee6a11bf3a3437d2fb59dc4f6c0ba686505f633243a62fb8",
+      "destination": "integrations/lightnav_sonic_emerge/simulation_checks/test_local_tabletop.py"
+    },
+    {
+      "source": "/home/embodied/LightNav-0/tests/lightnav_sonic/test_tabletop.py",
+      "sha256": "97f98f71f4e4e51022ba3a9df6984b9f479c12507b38a15ab2beeefb2c20be5b",
+      "destination": "integrations/lightnav_sonic_emerge/simulation_checks/test_tabletop.py"
+    },
+    {
+      "source": "/home/embodied/LightNav-0/tests/lightnav_sonic/test_tabletop_evaluate.py",
+      "sha256": "013c35e083d8120804fa16984a40b4ebdeb06da66b15b937da93513bc54e766b",
+      "destination": "integrations/lightnav_sonic_emerge/simulation_checks/test_tabletop_evaluate.py"
+    },
+    {
+      "source": "/home/embodied/LightNav-0/tests/lightnav_sonic/test_tabletop_io.py",
+      "sha256": "123bcad3626331f664cd5eb424580eed213e38cec62691bf007436f8f8c95a12",
+      "destination": "integrations/lightnav_sonic_emerge/simulation_checks/test_tabletop_io.py"
+    },
+    {
+      "source": "/home/embodied/LightNav-0/tests/lightnav_sonic/test_tabletop_logging.py",
+      "sha256": "8c7948d06fc3ce2a9f7b943ae15da564105156e9754278fe6b7f7fc6957f398f",
+      "destination": "integrations/lightnav_sonic_emerge/simulation_checks/test_tabletop_logging.py"
+    },
+    {
+      "source": "/home/embodied/LightNav-0/tests/lightnav_sonic/test_tabletop_reset.py",
+      "sha256": "78a4d24f737fb412cf2e0c4d196eadd57f425910b5b2102f39b6831b0cbbbb54",
+      "destination": "integrations/lightnav_sonic_emerge/simulation_checks/test_tabletop_reset.py"
+    },
+    {
+      "source": "/home/embodied/LightNav-0/tests/lightnav_sonic/test_tabletop_sim.py",
+      "sha256": "2489ac3ef0061cd91b041e1e082ba089914c4254c13fab2adff61328ac982b90",
+      "destination": "integrations/lightnav_sonic_emerge/simulation_checks/test_tabletop_sim.py"
+    },
+    {
+      "source": "/home/embodied/LightNav-0/tests/lightnav_sonic/test_tabletop_trials.py",
+      "sha256": "f3361ff822e3085e8401ab030dedb126931d0d2e455b3a2cd79be7c2aaef25df",
+      "destination": "integrations/lightnav_sonic_emerge/simulation_checks/test_tabletop_trials.py"
+    },
+    {
+      "source": "/home/embodied/LightNav-0/lightnav_sonic_bridge/lightnav_ws.py",
+      "sha256": "54a1283e1b4369e03e548dd914b734bd48c8c9b99d725c3ddd7f070f3feeac50",
+      "destination": "integrations/lightnav_sonic_emerge/bridge/lightnav_ws.py"
+    }
+  ]
+}

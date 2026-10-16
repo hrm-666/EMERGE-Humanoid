@@ -16,20 +16,24 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
-from dataclasses import asdict
 import json
 import math
+import time
+from dataclasses import asdict
 from numbers import Real
 from pathlib import Path
-import time
-from typing import Any, Mapping, Sequence
+from typing import Any
+from typing import Mapping
+from typing import Sequence
 
-from .adapter import AdapterLimits, LightNav2SonicAdapter
+from .adapter import AdapterLimits
+from .adapter import LightNav2SonicAdapter
 from .lightnav_ws import LightNavWsClient
 from .sonic_zmq import SonicZmqPublisher
 
 
-def extract_jpeg_from_camera_message(payload: Mapping[str, Any], camera_name: str) -> bytes:
+def extract_jpeg_from_camera_message(payload: Mapping[str, Any],
+                                     camera_name: str) -> bytes:
     """Extract JPEG bytes from SONIC's camera-publisher msgpack payload."""
 
     if not isinstance(payload, Mapping):
@@ -44,11 +48,13 @@ def extract_jpeg_from_camera_message(payload: Mapping[str, Any], camera_name: st
             raise ValueError(f"camera {camera_name!r} published empty bytes")
         return candidate
     if not isinstance(candidate, str) or not candidate:
-        raise ValueError(f"camera payload does not contain non-empty {camera_name!r} JPEG")
+        raise ValueError(
+            f"camera payload does not contain non-empty {camera_name!r} JPEG")
     try:
         return base64.b64decode(candidate, validate=True)
     except (ValueError, binascii.Error) as exc:
-        raise ValueError(f"camera {camera_name!r} JPEG is not valid base64") from exc
+        raise ValueError(
+            f"camera {camera_name!r} JPEG is not valid base64") from exc
 
 
 def yaw_from_wxyz(quaternion: Sequence[float]) -> float:
@@ -99,9 +105,12 @@ class SonicCameraSubscriber:
                 raw = self._socket.recv(flags=self._zmq.NOBLOCK)
             except self._zmq.Again:
                 return
-            payload = self._msgpack.unpackb(raw, raw=False, strict_map_key=False)
+            payload = self._msgpack.unpackb(raw,
+                                            raw=False,
+                                            strict_map_key=False)
             try:
-                self._jpeg = extract_jpeg_from_camera_message(payload, self._camera_name)
+                self._jpeg = extract_jpeg_from_camera_message(
+                    payload, self._camera_name)
                 self._received_at = time.monotonic()
             except (TypeError, ValueError):
                 # A malformed camera frame is discarded; its existing value is
@@ -150,7 +159,9 @@ class SonicYawSubscriber:
                 return
             if not raw.startswith(self._topic):
                 continue
-            payload = self._msgpack.unpackb(raw[len(self._topic) :], raw=False, strict_map_key=False)
+            payload = self._msgpack.unpackb(raw[len(self._topic):],
+                                            raw=False,
+                                            strict_map_key=False)
             if not isinstance(payload, Mapping):
                 continue
             try:
@@ -172,7 +183,8 @@ class SonicYawSubscriber:
         self._context.term()
 
 
-def _command_log(command: Any, *, waypoint: Sequence[float] | None, robot_yaw: float | None) -> str:
+def _command_log(command: Any, *, waypoint: Sequence[float] | None,
+                 robot_yaw: float | None) -> str:
     payload = {
         "waypoint": None if waypoint is None else list(waypoint),
         "robot_yaw_rad": robot_yaw,
@@ -181,7 +193,9 @@ def _command_log(command: Any, *, waypoint: Sequence[float] | None, robot_yaw: f
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
-def _safe_idle(publisher: SonicZmqPublisher | None, adapter: LightNav2SonicAdapter, yaw: float | None, reason: str) -> None:
+def _safe_idle(publisher: SonicZmqPublisher | None,
+               adapter: LightNav2SonicAdapter, yaw: float | None,
+               reason: str) -> None:
     if publisher is None or not publisher.activated:
         return
     command = adapter.idle(yaw, reason=reason)
@@ -194,26 +208,39 @@ def _safe_idle(publisher: SonicZmqPublisher | None, adapter: LightNav2SonicAdapt
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--lightnav-server", help="LightNav WebSocket endpoint, e.g. ws://gpu-host:8051")
-    source.add_argument("--mock-waypoint", nargs=3, type=float, metavar=("FORWARD_M", "LATERAL_M", "YAW_RAD"))
-    parser.add_argument("--instruction", default="walk forward", help="language instruction for LightNav")
+    source.add_argument(
+        "--lightnav-server",
+        help="LightNav WebSocket endpoint, e.g. ws://gpu-host:8051")
+    source.add_argument("--mock-waypoint",
+                        nargs=3,
+                        type=float,
+                        metavar=("FORWARD_M", "LATERAL_M", "YAW_RAD"))
+    parser.add_argument("--instruction",
+                        default="walk forward",
+                        help="language instruction for LightNav")
     parser.add_argument("--client-id", default="lightnav-sonic-g1")
     parser.add_argument("--camera-endpoint", default="tcp://127.0.0.1:5555")
     parser.add_argument("--camera-name", default="ego_view")
-    parser.add_argument("--sonic-feedback-endpoint", default="tcp://127.0.0.1:5557")
+    parser.add_argument("--sonic-feedback-endpoint",
+                        default="tcp://127.0.0.1:5557")
     parser.add_argument("--sonic-feedback-topic", default="g1_debug")
     parser.add_argument("--sonic-bind", default="tcp://*:5556")
     parser.add_argument("--control-hz", type=float, default=4.0)
     parser.add_argument("--input-timeout-s", type=float, default=0.75)
-    parser.add_argument("--max-steps", type=int, default=0, help="0 runs until LightNav stop or Ctrl-C")
-    parser.add_argument("--enable-motion", action="store_true", help="explicitly activate SONIC planner and publish commands")
+    parser.add_argument("--max-steps",
+                        type=int,
+                        default=0,
+                        help="0 runs until LightNav stop or Ctrl-C")
+    parser.add_argument(
+        "--enable-motion",
+        action="store_true",
+        help="explicitly activate SONIC planner and publish commands")
     parser.add_argument(
         "--elastic-band-release-file",
         type=Path,
         help=(
             "create this bridge-local signal after SONIC yaw feedback is live; "
-            "use it with room_sim --elastic-band-release-file"
-        ),
+            "use it with room_sim --elastic-band-release-file"),
     )
     return parser
 
@@ -226,11 +253,14 @@ def run(args: argparse.Namespace) -> int:
     if args.max_steps < 0:
         raise ValueError("--max-steps cannot be negative")
     if args.mock_waypoint is not None and args.enable_motion and args.max_steps == 0:
-        raise ValueError("mock motion requires a finite --max-steps safety limit")
+        raise ValueError(
+            "mock motion requires a finite --max-steps safety limit")
 
-    adapter = LightNav2SonicAdapter(AdapterLimits(control_period_s=1.0 / args.control_hz))
+    adapter = LightNav2SonicAdapter(
+        AdapterLimits(control_period_s=1.0 / args.control_hz))
     camera = SonicCameraSubscriber(args.camera_endpoint, args.camera_name)
-    yaw_source = SonicYawSubscriber(args.sonic_feedback_endpoint, args.sonic_feedback_topic)
+    yaw_source = SonicYawSubscriber(args.sonic_feedback_endpoint,
+                                    args.sonic_feedback_topic)
     publisher: SonicZmqPublisher | None = None
     client: LightNavWsClient | None = None
     elastic_band_release_file = args.elastic_band_release_file
@@ -239,18 +269,22 @@ def run(args: argparse.Namespace) -> int:
         if elastic_band_release_file.exists():
             raise FileExistsError(
                 f"elastic-band release file already exists: {elastic_band_release_file}; "
-                "remove this stale signal before starting the runner"
-            )
+                "remove this stale signal before starting the runner")
     period_s = 1.0 / args.control_hz
     step = 0
     try:
         if args.enable_motion:
             publisher = SonicZmqPublisher(args.sonic_bind)
-            print(f"SONIC planner publisher bound at {args.sonic_bind}; waiting for subscriber")
+            print(
+                f"SONIC planner publisher bound at {args.sonic_bind}; waiting for subscriber"
+            )
             publisher.activate_planner()
-            print("SONIC planner mode activated; normal stop sends locomotion IDLE only")
+            print(
+                "SONIC planner mode activated; normal stop sends locomotion IDLE only"
+            )
         if args.lightnav_server:
-            client = LightNavWsClient(args.lightnav_server, client_id=args.client_id)
+            client = LightNavWsClient(args.lightnav_server,
+                                      client_id=args.client_id)
             client.connect()
             print(f"connected to LightNav server {args.lightnav_server}")
 
@@ -260,13 +294,16 @@ def run(args: argparse.Namespace) -> int:
             yaw = yaw_source.latest(args.input_timeout_s)
             if jpeg is None or yaw is None:
                 missing = "camera" if jpeg is None else "robot yaw feedback"
-                _safe_idle(publisher, adapter, yaw, f"stale or missing {missing}")
+                _safe_idle(publisher, adapter, yaw,
+                           f"stale or missing {missing}")
                 print(f"idle: stale or missing {missing}")
             else:
                 try:
                     if elastic_band_release_file is not None:
                         elastic_band_release_file.touch(exist_ok=False)
-                        print(f"released room ElasticBand via {elastic_band_release_file}")
+                        print(
+                            f"released room ElasticBand via {elastic_band_release_file}"
+                        )
                         elastic_band_release_file = None
                     if args.mock_waypoint is not None:
                         waypoint = tuple(args.mock_waypoint)
@@ -279,18 +316,23 @@ def run(args: argparse.Namespace) -> int:
                     if stop:
                         command = adapter.idle(yaw, reason="LightNav stop=true")
                         _safe_idle(publisher, adapter, yaw, command.reason)
-                        print(_command_log(command, waypoint=waypoint, robot_yaw=yaw))
+                        print(
+                            _command_log(command,
+                                         waypoint=waypoint,
+                                         robot_yaw=yaw))
                         return 0
                     command = adapter.convert_or_idle(waypoint, yaw)
                     if publisher is not None and publisher.activated:
                         publisher.send_planner(command)
-                    print(_command_log(command, waypoint=waypoint, robot_yaw=yaw))
+                    print(
+                        _command_log(command, waypoint=waypoint, robot_yaw=yaw))
                     step += 1
                 # Any recoverable bridge failure must degrade to a planner-level
                 # IDLE packet. KeyboardInterrupt is deliberately not caught, so
                 # normal shutdown still reaches the finally block below.
                 except Exception as exc:
-                    _safe_idle(publisher, adapter, yaw, f"bridge failure: {exc}")
+                    _safe_idle(publisher, adapter, yaw,
+                               f"bridge failure: {exc}")
                     print(f"idle: bridge failure: {exc}")
 
             remaining = period_s - (time.monotonic() - tick_started)
@@ -300,7 +342,8 @@ def run(args: argparse.Namespace) -> int:
         print("interrupted; sending SONIC locomotion IDLE")
         return 130
     finally:
-        _safe_idle(publisher, adapter, yaw_source.latest(args.input_timeout_s), "runner shutdown")
+        _safe_idle(publisher, adapter, yaw_source.latest(args.input_timeout_s),
+                   "runner shutdown")
         if client is not None:
             client.close()
         if publisher is not None:

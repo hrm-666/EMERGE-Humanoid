@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from io import BytesIO
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from io import BytesIO
+from pathlib import Path
 
 from PIL import Image
 
-from integrations.lightnav_sonic_emerge.observation_writer import EgoObservationWriter
+from integrations.lightnav_sonic_emerge import observation_writer
 
 
 def _jpeg_bytes() -> bytes:
@@ -18,12 +18,15 @@ def _jpeg_bytes() -> bytes:
 
 
 class EgoObservationWriterTest(unittest.TestCase):
+
     def test_writes_png_and_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            writer = EgoObservationWriter(directory)
+            writer = observation_writer.EgoObservationWriter(directory)
             manifest_path = writer.write_jpeg(_jpeg_bytes())
 
-            self.assertEqual(manifest_path, Path(directory) / "artifacts/observations/observation.json")
+            self.assertEqual(
+                manifest_path,
+                Path(directory) / "artifacts/observations/observation.json")
             payload = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["revision"], 1)
             self.assertEqual(payload["reference_view"], "ego_view")
@@ -36,12 +39,13 @@ class EgoObservationWriterTest(unittest.TestCase):
 
     def test_disabled_writer_has_no_side_effect(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            writer = EgoObservationWriter(directory, enabled=False)
+            writer = observation_writer.EgoObservationWriter(directory,
+                                                             enabled=False)
             self.assertIsNone(writer.write_jpeg(_jpeg_bytes()))
             self.assertFalse((Path(directory) / "artifacts").exists())
 
     def test_rejects_empty_image(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            writer = EgoObservationWriter(directory)
+            writer = observation_writer.EgoObservationWriter(directory)
             with self.assertRaises(ValueError):
                 writer.write_jpeg(b"")

@@ -1,5 +1,8 @@
 # LightNav-0 + SONIC 导航 Skill 文档索引
 
+先读 [2026-10-16 仿真整理与分支约定](06_仿真代码整理与分支约定.md) 和
+[当前仿真入口](../integrations/lightnav_sonic_emerge/SIMULATION.md)。
+
 本目录记录从 EMERGE-Humanoid fork 初始化到 LightNav-0 + SONIC 导航 Skill
 落地和实测的全过程。新协作者建议先阅读 integration 的
 [主 README](../integrations/lightnav_sonic_emerge/README.md)，再根据任务查阅以下中文文档。

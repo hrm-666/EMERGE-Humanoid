@@ -1,5 +1,14 @@
-"""EMERGE external driver for the LightNav-0 to SONIC navigation stack."""
+"""LightNav simulation integration; load the EMERGE driver only on demand.
 
-from .driver import SonicLightNavDriver
+Standalone bridge/simulator processes use their own Python environments and
+must not import the Controller or its Python 3.11+ plugin dependencies.
+"""
 
 __all__ = ["SonicLightNavDriver"]
+
+
+def __getattr__(name):
+    if name == "SonicLightNavDriver":
+        from .driver import SonicLightNavDriver
+        return SonicLightNavDriver
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

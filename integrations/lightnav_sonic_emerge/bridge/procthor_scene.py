@@ -6,12 +6,11 @@ SONIC scene and LightNav's ``mujoco_demo`` assets remain read-only.
 
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
 from copy import deepcopy
 from pathlib import Path
-import xml.etree.ElementTree as ET
 
 from .room_scene import _materialize_direct_includes
-
 
 # ``mujoco_demo/vln_mujoco/model.py`` spawns its TurtleBot here.  Anchoring the
 # environment at the negative of this point puts that same navigable location
@@ -40,13 +39,17 @@ def _absolute_environment_file_paths(root: ET.Element, scene: Path) -> None:
         try:
             source.relative_to(assets_root)
         except ValueError as exc:
-            raise ValueError(f"ProcTHOR asset escapes bundled asset root: {raw_path}") from exc
+            raise ValueError(
+                f"ProcTHOR asset escapes bundled asset root: {raw_path}"
+            ) from exc
         if not source.is_file():
-            raise FileNotFoundError(f"bundled ProcTHOR asset is missing: {source}")
+            raise FileNotFoundError(
+                f"bundled ProcTHOR asset is missing: {source}")
         element.set("file", str(source))
 
 
-def _append_environment_defaults(g1_root: ET.Element, room_root: ET.Element) -> None:
+def _append_environment_defaults(g1_root: ET.Element,
+                                 room_root: ET.Element) -> None:
     room_default = room_root.find("default")
     if room_default is None:
         return
@@ -58,7 +61,8 @@ def _append_environment_defaults(g1_root: ET.Element, room_root: ET.Element) -> 
         g1_default.append(deepcopy(child))
 
 
-def _append_environment_assets(g1_root: ET.Element, room_root: ET.Element) -> None:
+def _append_environment_assets(g1_root: ET.Element,
+                               room_root: ET.Element) -> None:
     room_asset = room_root.find("asset")
     if room_asset is None:
         raise ValueError("ProcTHOR scene has no <asset> block")
@@ -66,7 +70,9 @@ def _append_environment_assets(g1_root: ET.Element, room_root: ET.Element) -> No
     if g1_asset is None:
         g1_asset = ET.Element("asset")
         g1_root.insert(0, g1_asset)
-    existing_names = {child.get("name") for child in g1_asset if child.get("name")}
+    existing_names = {
+        child.get("name") for child in g1_asset if child.get("name")
+    }
     duplicates = [
         child.get("name")
         for child in room_asset
@@ -79,11 +85,13 @@ def _append_environment_assets(g1_root: ET.Element, room_root: ET.Element) -> No
         g1_asset.append(deepcopy(child))
 
 
-def _append_environment_worldbody(g1_root: ET.Element, room_root: ET.Element) -> None:
+def _append_environment_worldbody(g1_root: ET.Element,
+                                  room_root: ET.Element) -> None:
     room_worldbody = room_root.find("worldbody")
     g1_worldbody = g1_root.find("worldbody")
     if room_worldbody is None or g1_worldbody is None:
-        raise ValueError("both SONIC and ProcTHOR scenes must contain <worldbody>")
+        raise ValueError(
+            "both SONIC and ProcTHOR scenes must contain <worldbody>")
 
     # The SONIC root scene supplies a checkerboard floor with the generic name
     # ``floor``.  Remove it in the derivative so the ProcTHOR structural floor
@@ -104,7 +112,8 @@ def _append_environment_worldbody(g1_root: ET.Element, room_root: ET.Element) ->
         anchor.append(deepcopy(child))
 
 
-def _append_environment_contacts(g1_root: ET.Element, room_root: ET.Element) -> None:
+def _append_environment_contacts(g1_root: ET.Element,
+                                 room_root: ET.Element) -> None:
     room_contact = room_root.find("contact")
     if room_contact is None:
         return
@@ -136,9 +145,11 @@ def compose_procthor_g1_scene(
     procthor_scene = procthor_scene.resolve()
     output_scene = output_scene.resolve()
     if not g1_base_scene.is_file():
-        raise FileNotFoundError(f"SONIC base scene does not exist: {g1_base_scene}")
+        raise FileNotFoundError(
+            f"SONIC base scene does not exist: {g1_base_scene}")
     if not procthor_scene.is_file():
-        raise FileNotFoundError(f"ProcTHOR scene does not exist: {procthor_scene}")
+        raise FileNotFoundError(
+            f"ProcTHOR scene does not exist: {procthor_scene}")
 
     g1_tree = ET.parse(g1_base_scene)
     g1_root = g1_tree.getroot()

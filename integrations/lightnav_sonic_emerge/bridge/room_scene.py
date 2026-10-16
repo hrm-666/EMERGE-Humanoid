@@ -6,8 +6,8 @@ upstream asset remain read-only; only the requested output path is written.
 
 from __future__ import annotations
 
-from pathlib import Path
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 
 def _add_geom(
@@ -53,7 +53,8 @@ def _add_materials(root: ET.Element) -> None:
             ET.SubElement(asset, "material", {"name": name, "rgba": rgba})
 
 
-def _materialize_direct_includes(root: ET.Element, base_scene: Path, output_dir: Path) -> None:
+def _materialize_direct_includes(root: ET.Element, base_scene: Path,
+                                 output_dir: Path) -> None:
     """Write sidecars that preserve the upstream model's relative mesh paths."""
 
     for include in root.findall("include"):
@@ -64,13 +65,15 @@ def _materialize_direct_includes(root: ET.Element, base_scene: Path, output_dir:
         if not source.is_absolute():
             source = (base_scene.parent / source).resolve()
         if not source.is_file():
-            raise FileNotFoundError(f"included SONIC model does not exist: {source}")
+            raise FileNotFoundError(
+                f"included SONIC model does not exist: {source}")
         include_tree = ET.parse(source)
         compiler = include_tree.getroot().find("compiler")
         if compiler is not None:
             meshdir = compiler.get("meshdir")
             if meshdir is not None and not Path(meshdir).is_absolute():
-                compiler.set("meshdir", str((source.parent / meshdir).resolve()))
+                compiler.set("meshdir", str(
+                    (source.parent / meshdir).resolve()))
         sidecar = output_dir / f"_lightnav_{source.name}"
         ET.indent(include_tree, space="  ")
         include_tree.write(sidecar, encoding="utf-8", xml_declaration=True)
@@ -88,12 +91,14 @@ def add_lightnav_ego_camera(output_dir: Path) -> None:
 
     sidecar = output_dir / "_lightnav_g1_29dof_with_hand.xml"
     if not sidecar.is_file():
-        raise FileNotFoundError(f"derived G1 include sidecar is missing: {sidecar}")
+        raise FileNotFoundError(
+            f"derived G1 include sidecar is missing: {sidecar}")
     tree = ET.parse(sidecar)
     root = tree.getroot()
     torso = root.find(".//body[@name='torso_link']")
     if torso is None:
-        raise ValueError("derived G1 include has no torso_link for LightNav camera")
+        raise ValueError(
+            "derived G1 include has no torso_link for LightNav camera")
     for camera in tuple(torso.findall("camera")):
         if camera.get("name") == "lightnav_ego_camera":
             torso.remove(camera)
@@ -120,7 +125,8 @@ def compose_lightnav_room_scene(base_scene: Path, output_scene: Path) -> Path:
     base_scene = base_scene.resolve()
     output_scene = output_scene.resolve()
     if not base_scene.is_file():
-        raise FileNotFoundError(f"SONIC base scene does not exist: {base_scene}")
+        raise FileNotFoundError(
+            f"SONIC base scene does not exist: {base_scene}")
 
     tree = ET.parse(base_scene)
     root = tree.getroot()
@@ -139,19 +145,79 @@ def compose_lightnav_room_scene(base_scene: Path, output_scene: Path) -> Path:
     # A 1.2 m doorway lies in the north wall (+y), centred on x=0.  Furniture
     # keeps the canonical G1 spawn at (0, 0) clear while providing visible
     # landmark geometry for visual-navigation experiments.
-    _add_geom(worldbody, name="lightnav_room_south", geom_type="box", pos="0 -3 1.5", size="3 0.08 1.5", material="lightnav_wall")
-    _add_geom(worldbody, name="lightnav_room_west", geom_type="box", pos="-3 0 1.5", size="0.08 3 1.5", material="lightnav_wall")
-    _add_geom(worldbody, name="lightnav_room_east", geom_type="box", pos="3 0 1.5", size="0.08 3 1.5", material="lightnav_wall")
-    _add_geom(worldbody, name="lightnav_room_north_left", geom_type="box", pos="-1.8 3 1.5", size="1.2 0.08 1.5", material="lightnav_wall")
-    _add_geom(worldbody, name="lightnav_room_north_right", geom_type="box", pos="1.8 3 1.5", size="1.2 0.08 1.5", material="lightnav_wall")
+    _add_geom(worldbody,
+              name="lightnav_room_south",
+              geom_type="box",
+              pos="0 -3 1.5",
+              size="3 0.08 1.5",
+              material="lightnav_wall")
+    _add_geom(worldbody,
+              name="lightnav_room_west",
+              geom_type="box",
+              pos="-3 0 1.5",
+              size="0.08 3 1.5",
+              material="lightnav_wall")
+    _add_geom(worldbody,
+              name="lightnav_room_east",
+              geom_type="box",
+              pos="3 0 1.5",
+              size="0.08 3 1.5",
+              material="lightnav_wall")
+    _add_geom(worldbody,
+              name="lightnav_room_north_left",
+              geom_type="box",
+              pos="-1.8 3 1.5",
+              size="1.2 0.08 1.5",
+              material="lightnav_wall")
+    _add_geom(worldbody,
+              name="lightnav_room_north_right",
+              geom_type="box",
+              pos="1.8 3 1.5",
+              size="1.2 0.08 1.5",
+              material="lightnav_wall")
 
-    _add_geom(worldbody, name="lightnav_table_top", geom_type="box", pos="0.65 1.45 0.75", size="0.75 0.48 0.06", material="lightnav_wood")
-    _add_geom(worldbody, name="lightnav_table_base", geom_type="box", pos="0.65 1.45 0.36", size="0.12 0.12 0.36", material="lightnav_wood")
-    _add_geom(worldbody, name="lightnav_sofa_base", geom_type="box", pos="1.85 -1.15 0.36", size="0.65 0.42 0.36", material="lightnav_fabric")
-    _add_geom(worldbody, name="lightnav_sofa_back", geom_type="box", pos="2.35 -1.15 0.82", size="0.10 0.42 0.46", material="lightnav_fabric")
-    _add_geom(worldbody, name="lightnav_chair", geom_type="box", pos="-1.35 0.65 0.42", size="0.27 0.27 0.42", material="lightnav_wood")
-    _add_geom(worldbody, name="lightnav_cabinet", geom_type="box", pos="-1.85 -1.55 0.65", size="0.42 0.28 0.65", material="lightnav_cabinet")
-    _add_geom(worldbody, name="lightnav_red_target", geom_type="sphere", pos="-1.85 -1.55 1.36", size="0.12", material="lightnav_target")
+    _add_geom(worldbody,
+              name="lightnav_table_top",
+              geom_type="box",
+              pos="0.65 1.45 0.75",
+              size="0.75 0.48 0.06",
+              material="lightnav_wood")
+    _add_geom(worldbody,
+              name="lightnav_table_base",
+              geom_type="box",
+              pos="0.65 1.45 0.36",
+              size="0.12 0.12 0.36",
+              material="lightnav_wood")
+    _add_geom(worldbody,
+              name="lightnav_sofa_base",
+              geom_type="box",
+              pos="1.85 -1.15 0.36",
+              size="0.65 0.42 0.36",
+              material="lightnav_fabric")
+    _add_geom(worldbody,
+              name="lightnav_sofa_back",
+              geom_type="box",
+              pos="2.35 -1.15 0.82",
+              size="0.10 0.42 0.46",
+              material="lightnav_fabric")
+    _add_geom(worldbody,
+              name="lightnav_chair",
+              geom_type="box",
+              pos="-1.35 0.65 0.42",
+              size="0.27 0.27 0.42",
+              material="lightnav_wood")
+    _add_geom(worldbody,
+              name="lightnav_cabinet",
+              geom_type="box",
+              pos="-1.85 -1.55 0.65",
+              size="0.42 0.28 0.65",
+              material="lightnav_cabinet")
+    _add_geom(worldbody,
+              name="lightnav_red_target",
+              geom_type="sphere",
+              pos="-1.85 -1.55 1.36",
+              size="0.12",
+              material="lightnav_target")
 
     ET.SubElement(
         worldbody,

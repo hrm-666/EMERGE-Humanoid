@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from io import BytesIO
 import json
 import os
-from pathlib import Path
 import tempfile
+from io import BytesIO
+from pathlib import Path
 from threading import Lock
 
 from PIL import Image
@@ -47,8 +47,9 @@ class EgoObservationWriter:
             self.directory.mkdir(parents=True, exist_ok=True)
             with self._lock:
                 image_fd, image_tmp_name = tempfile.mkstemp(
-                    prefix=f".{self.view_name}.", suffix=".tmp.png", dir=self.directory
-                )
+                    prefix=f".{self.view_name}.",
+                    suffix=".tmp.png",
+                    dir=self.directory)
                 os.close(image_fd)
                 image_tmp = Path(image_tmp_name)
                 try:
@@ -60,24 +61,34 @@ class EgoObservationWriter:
 
                 self._revision += 1
                 manifest = {
-                    "revision": self._revision,
-                    "reference_view": self.view_name,
-                    "views": [
-                        {
-                            "name": self.view_name,
-                            "image_path": self.image_path.relative_to(self.workspace).as_posix(),
-                            "width": width,
-                            "height": height,
-                        }
-                    ],
+                    "revision":
+                        self._revision,
+                    "reference_view":
+                        self.view_name,
+                    "views": [{
+                        "name":
+                            self.view_name,
+                        "image_path":
+                            self.image_path.relative_to(self.workspace
+                                                       ).as_posix(),
+                        "width":
+                            width,
+                        "height":
+                            height,
+                    }],
                 }
                 manifest_fd, manifest_tmp_name = tempfile.mkstemp(
-                    prefix=".observation.", suffix=".tmp.json", dir=self.directory
-                )
+                    prefix=".observation.",
+                    suffix=".tmp.json",
+                    dir=self.directory)
                 manifest_tmp = Path(manifest_tmp_name)
                 try:
-                    with os.fdopen(manifest_fd, "w", encoding="utf-8") as output:
-                        json.dump(manifest, output, ensure_ascii=False, indent=2)
+                    with os.fdopen(manifest_fd, "w",
+                                   encoding="utf-8") as output:
+                        json.dump(manifest,
+                                  output,
+                                  ensure_ascii=False,
+                                  indent=2)
                         output.write("\n")
                     os.replace(manifest_tmp, self.manifest_path)
                 finally:

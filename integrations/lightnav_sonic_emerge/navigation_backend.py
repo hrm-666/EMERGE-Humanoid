@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
 import math
-from pathlib import Path
 import time
-from typing import Any, Callable
+from dataclasses import asdict
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+from typing import Callable
 
 try:
     from .observation_writer import EgoObservationWriter
 except ImportError:  # External-plugin loading adds this directory to sys.path.
     from observation_writer import EgoObservationWriter
-
 
 CancelCheck = Callable[[], str | None]
 StateCallback = Callable[[dict[str, Any]], None]
@@ -30,6 +31,8 @@ class NavigationConfig:
     control_hz: float = 4.0
     input_timeout_s: float = 0.75
     max_stale_ticks: int = 8
+    inference_timeout_s: float = 10.0
+    max_runtime_s: float = 120.0
     elastic_band_release_file: Path | None = None
 
     def __post_init__(self) -> None:
@@ -46,6 +49,10 @@ class NavigationConfig:
             raise ValueError("control_hz must be finite and positive")
         if not math.isfinite(self.input_timeout_s) or self.input_timeout_s <= 0:
             raise ValueError("input_timeout_s must be finite and positive")
+        for name in ("inference_timeout_s", "max_runtime_s"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
         if self.max_stale_ticks < 1:
             raise ValueError("max_stale_ticks must be at least one")
 
@@ -87,16 +94,13 @@ class NavigationBackend:
         self._monotonic = monotonic
         self._sleep = sleep
 
-        if any(
-            factory is None
-            for factory in (
+        if any(factory is None for factory in (
                 camera_factory,
                 yaw_factory,
                 publisher_factory,
                 client_factory,
                 adapter_factory,
-            )
-        ):
+        )):
             defaults = self._default_factories()
             camera_factory = camera_factory or defaults[0]
             yaw_factory = yaw_factory or defaults[1]
@@ -110,33 +114,38 @@ class NavigationBackend:
         self._client_factory = client_factory
         self._adapter_factory = adapter_factory
 
-    @staticmethod
-    def _default_factories() -> tuple[Callable[..., Any], ...]:
+    def _default_factories(self) -> tuple[Callable[..., Any], ...]:
         try:
-            from .bridge.adapter import AdapterLimits, LightNav2SonicAdapter
+            from .bridge.adapter import AdapterLimits
+            from .bridge.adapter import LightNav2SonicAdapter
             from .bridge.lightnav_ws import LightNavWsClient
-            from .bridge.runner import SonicCameraSubscriber, SonicYawSubscriber
+            from .bridge.runner import SonicCameraSubscriber
+            from .bridge.runner import SonicYawSubscriber
             from .bridge.sonic_zmq import SonicZmqPublisher
-        except ImportError as exc:
+        except ImportError:
             try:
-                from bridge.adapter import AdapterLimits, LightNav2SonicAdapter
+                from bridge.adapter import AdapterLimits
+                from bridge.adapter import LightNav2SonicAdapter
                 from bridge.lightnav_ws import LightNavWsClient
-                from bridge.runner import SonicCameraSubscriber, SonicYawSubscriber
+                from bridge.runner import SonicCameraSubscriber
+                from bridge.runner import SonicYawSubscriber
                 from bridge.sonic_zmq import SonicZmqPublisher
             except ImportError as fallback_exc:
                 raise RuntimeError(
                     "the vendored LightNav-SONIC bridge is not importable from the "
-                    "external plugin directory"
-                ) from fallback_exc
+                    "external plugin directory") from fallback_exc
 
         return (
             SonicCameraSubscriber,
             SonicYawSubscriber,
             SonicZmqPublisher,
-            lambda endpoint, client_id: LightNavWsClient(endpoint, client_id=client_id),
-            lambda period: LightNav2SonicAdapter(
-                AdapterLimits(control_period_s=period)
+            lambda endpoint, client_id: LightNavWsClient(
+                endpoint,
+                client_id=client_id,
+                request_timeout_s=self.config.inference_timeout_s,
             ),
+            lambda period: LightNav2SonicAdapter(
+                AdapterLimits(control_period_s=period)),
         )
 
     def run(
@@ -147,6 +156,22 @@ class NavigationBackend:
         cancel_check: CancelCheck | None = None,
         state_callback: StateCallback | None = None,
     ) -> NavigationResult:
+        """Execute one bounded navigation request and release its resources.
+
+        Args:
+            instruction: Current navigation subgoal in natural language.
+            max_steps: Maximum number of control ticks, including stale input.
+            cancel_check: Callback returning a cancellation reason, or None.
+            state_callback: Callback receiving execution state updates.
+
+        Returns:
+            An execution result. Completion never implies semantic arrival.
+            Runtime expiry is checked between synchronous operations; an
+            outstanding request can delay return by its configured timeout.
+
+        Raises:
+            ValueError: The instruction is empty or max_steps is nonpositive.
+        """
         if not instruction.strip():
             raise ValueError("navigation instruction must be non-empty")
         if max_steps < 1:
@@ -154,6 +179,7 @@ class NavigationBackend:
 
         period_s = 1.0 / self.config.control_hz
         started = self._monotonic()
+        deadline = started + self.config.max_runtime_s
         camera = yaw_source = publisher = client = None
         yaw: float | None = None
         last_waypoint: tuple[float, float, float] | None = None
@@ -161,13 +187,16 @@ class NavigationBackend:
         lightnav_stop = False
         adapter = self._adapter_factory(period_s)
 
-        def finish(status: str, reason: str, error: str | None = None) -> NavigationResult:
+        def finish(status: str,
+                   reason: str,
+                   error: str | None = None) -> NavigationResult:
             result = NavigationResult(
                 status=status,
                 reason=reason,
                 ticks=ticks,
                 command_steps=command_steps,
-                elapsed_s=max(0.0, self._monotonic() - started),
+                elapsed_s=max(0.0,
+                              self._monotonic() - started),
                 last_waypoint=last_waypoint,
                 last_yaw_rad=yaw,
                 lightnav_stop=lightnav_stop,
@@ -178,33 +207,43 @@ class NavigationBackend:
             return result
 
         try:
-            camera = self._camera_factory(
-                self.config.camera_endpoint, self.config.camera_name
-            )
+            camera = self._camera_factory(self.config.camera_endpoint,
+                                          self.config.camera_name)
             yaw_source = self._yaw_factory(
                 self.config.sonic_feedback_endpoint,
                 self.config.sonic_feedback_topic,
             )
+            client = self._client_factory(self.config.lightnav_server,
+                                          self.config.client_id)
+            cancellation = cancel_check() if cancel_check is not None else None
+            if cancellation:
+                return finish("cancelled", str(cancellation))
+            client.connect()
+            cancellation = cancel_check() if cancel_check is not None else None
+            if cancellation:
+                return finish("cancelled", str(cancellation))
+            if self._monotonic() >= deadline:
+                return finish("budget_exhausted", "max_runtime_s")
             publisher = self._publisher_factory(self.config.sonic_bind)
             publisher.activate_planner()
-            client = self._client_factory(
-                self.config.lightnav_server, self.config.client_id
-            )
-            client.connect()
 
             while ticks < max_steps:
                 tick_started = self._monotonic()
-                cancellation = cancel_check() if cancel_check is not None else None
+                cancellation = cancel_check(
+                ) if cancel_check is not None else None
                 if cancellation:
                     return finish("cancelled", str(cancellation))
 
+                if self._monotonic() >= deadline:
+                    return finish("budget_exhausted", "max_runtime_s")
                 ticks += 1
                 jpeg = camera.latest(self.config.input_timeout_s)
                 yaw = yaw_source.latest(self.config.input_timeout_s)
                 if jpeg is None or yaw is None:
                     stale_ticks += 1
                     missing = "camera" if jpeg is None else "robot yaw feedback"
-                    self._send_idle(publisher, adapter, yaw, f"stale or missing {missing}")
+                    self._send_idle(publisher, adapter, yaw,
+                                    f"stale or missing {missing}")
                     self._update_running_state(
                         state_callback,
                         instruction=instruction,
@@ -216,16 +255,24 @@ class NavigationBackend:
                         last_error=f"stale or missing {missing}",
                     )
                     if stale_ticks >= self.config.max_stale_ticks:
-                        return finish("failed", "stale_input", f"stale or missing {missing}")
+                        return finish("failed", "stale_input",
+                                      f"stale or missing {missing}")
                 else:
                     stale_ticks = 0
                     self.observation_writer.write_jpeg(jpeg)
-                    self._release_elastic_band()
                     reply = client.predict(jpeg, instruction)
+                    cancellation = cancel_check(
+                    ) if cancel_check is not None else None
+                    if cancellation:
+                        return finish("cancelled", str(cancellation))
+                    if self._monotonic() >= deadline:
+                        return finish("budget_exhausted", "max_runtime_s")
+                    self._release_elastic_band()
                     last_waypoint = tuple(reply.first_waypoint)
                     lightnav_stop = bool(reply.stop)
                     if lightnav_stop:
-                        self._send_idle(publisher, adapter, yaw, "LightNav stop=true")
+                        self._send_idle(publisher, adapter, yaw,
+                                        "LightNav stop=true")
                         return finish("completed", "lightnav_stop")
 
                     command = adapter.convert_or_idle(last_waypoint, yaw)
@@ -250,7 +297,8 @@ class NavigationBackend:
         except Exception as exc:
             return finish("failed", "exception", f"{type(exc).__name__}: {exc}")
         finally:
-            self._send_idle(publisher, adapter, yaw, "navigation action shutdown")
+            self._send_idle(publisher, adapter, yaw,
+                            "navigation action shutdown")
             for resource in (client, publisher, camera, yaw_source):
                 if resource is not None:
                     try:
@@ -266,7 +314,8 @@ class NavigationBackend:
         path.touch(exist_ok=True)
 
     @staticmethod
-    def _send_idle(publisher: Any, adapter: Any, yaw: float | None, reason: str) -> None:
+    def _send_idle(publisher: Any, adapter: Any, yaw: float | None,
+                   reason: str) -> None:
         if publisher is None or not getattr(publisher, "activated", False):
             return
         try:
@@ -288,15 +337,13 @@ class NavigationBackend:
     ) -> None:
         if callback is None:
             return
-        callback(
-            {
-                "status": "running",
-                "instruction": instruction,
-                "ticks": ticks,
-                "command_steps": command_steps,
-                "max_steps": max_steps,
-                "last_yaw_rad": yaw,
-                "last_waypoint": list(waypoint) if waypoint is not None else None,
-                "last_error": last_error,
-            }
-        )
+        callback({
+            "status": "running",
+            "instruction": instruction,
+            "ticks": ticks,
+            "command_steps": command_steps,
+            "max_steps": max_steps,
+            "last_yaw_rad": yaw,
+            "last_waypoint": list(waypoint) if waypoint is not None else None,
+            "last_error": last_error,
+        })
