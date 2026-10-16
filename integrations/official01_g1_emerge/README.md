@@ -58,9 +58,25 @@ still requires live image and heading streams.
 
 Start the existing simulation services exactly as documented in
 `~/visionpro_sonic_bridge/integrations/official01_sim_executive/RUNBOOK.md`:
-MuJoCo owner, SONIC deploy, GR00T PolicyServer, and LightNav server. Do **not**
-start Terminal 4 (`run_executive.sh`) separately; this Driver starts that same
-script and must be its sole owner.
+start the MuJoCo owner first, then SONIC deploy, then GR00T PolicyServer. The
+MuJoCo owner publishes simulated `rt/inspire/state`; SONIC receives those DDS
+samples through the isolated sim/deploy namespace bridge. GR00T PolicyServer
+must answer its ping during executive startup. Start LightNav separately only
+when testing `navigate`. Do **not** start Terminal 4 (`run_executive.sh`)
+separately; this Driver starts that same script and must be its sole owner.
+
+If startup reports `no simulated rt/inspire/state callback within 5.0s`, check
+that Terminal 1's MuJoCo owner is still running, then verify the DDS namespace
+bridge:
+
+```bash
+cd ~/visionpro_sonic_bridge
+integrations/sonic_sim_isolation/check_isolated_dds_netns.sh
+```
+
+The executive has already reached the DDS hand-state wait at this error; it is
+not an Agent or sudo prompt problem. Restart the Controller only after the
+MuJoCo owner and SONIC deploy are both running and the bridge check passes.
 
 Start the Controller from an interactive terminal. Before the managed executive
 starts, the Controller runs `sudo -v` in that same terminal, so sudo can prompt
@@ -84,7 +100,7 @@ Then start the Main Agent in another terminal:
 ```bash
 cd ~/EMERGE-Humanoid
 conda activate EmergePolicy
-python -m Emerge agent
+python -m Emerge
 ```
 
 Use a preset safe observation stand-off for initial simulation tests. No action

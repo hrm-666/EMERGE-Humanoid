@@ -157,7 +157,7 @@ python -m robot.controller \
 Run the agent CLI in another terminal:
 
 ```bash
-python -m Emerge agent
+python -m Emerge
 ```
 
 Start the default OpenPI, VGGT, and SAM3 services:
