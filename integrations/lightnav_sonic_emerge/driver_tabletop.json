@@ -1,0 +1,19 @@
+{
+  "lightnav_server": "ws://127.0.0.1:8051",
+  "camera_endpoint": "tcp://127.0.0.1:5560",
+  "camera_name": "ego_view",
+  "sonic_feedback_endpoint": "tcp://127.0.0.1:5557",
+  "sonic_feedback_topic": "g1_debug",
+  "sonic_bind": "tcp://127.0.0.1:5556",
+  "client_id": "emerge-lightnav-sonic-g1",
+  "control_hz": 4.0,
+  "input_timeout_s": 0.75,
+  "max_stale_ticks": 8,
+  "default_max_steps": 120,
+  "max_action_steps": 120,
+  "elastic_band_release_file": null,
+  "publish_observations": true,
+  "inference_timeout_s": 10.0,
+  "max_action_runtime_s": 120.0,
+  "camera_transport": "official01_rgb"
+}

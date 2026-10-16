@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,6 +40,9 @@ class ObservationStore:
 
     def load(self) -> CameraObservation:
         payload = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        expires_at = payload.get("expires_at")
+        if expires_at is not None and not time.time() < float(expires_at):
+            raise ValueError("Camera observation expired; wait for a fresh frame")
         views = tuple(
             CameraView(
                 name=str(item["name"]),

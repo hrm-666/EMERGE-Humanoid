@@ -10,7 +10,7 @@
 
 ## Sensors
 
-- **Navigation camera:** G1 original `head_camera`, published as `ego_view`.
+- **Navigation camera:** `ego_view` from the configured simulation: SONIC JPEG (ProcTHOR) or Official01 RGB (apple table).
 - **Heading:** world yaw derived from SONIC `g1_debug.base_quat`.
 - The current `g1_debug` stream does not provide a trustworthy measured world X/Y pose. Never invent X/Y coordinates or metric path progress.
 
@@ -37,13 +37,21 @@ Parameters:
 
 ## Navigation Protocol
 
-1. Before acting on a multi-step request, create a PLAN with a distinct navigation subgoal and an observable done criterion.
+Read the built-in `lightnav-sonic-navigation` Skill listed in the native Skills
+summary before dispatch. It defines the complete operational contract and
+uses `update_plan`, `execute_robot_action`, and `delegate_subagent`.
+
+1. Before acting on a multi-step request, use `update_plan` to create a PLAN with a distinct navigation subgoal and an observable done criterion.
 2. Use `navigate_vln` for locomotion. Do not use manipulation actions in this embodiment.
-3. After every action result, re-read `ROBOT_STATE.md` and inspect the latest observation before updating the plan.
+3. After every action result, re-read `ROBOT_STATE.md` and use `delegate_subagent(agent_name="task_verification", ...)` to verify the active criterion before updating the plan. Reuse a current native visual-monitor verification of the same criterion when available.
 4. `Navigation action completed` means the low-level action ended. It does not prove that the semantic destination was reached.
 5. LightNav `stop=true` ends the action but still requires task-level visual verification.
 6. A step-budget result requires reassessment. Do not report success merely because `max_steps` was exhausted.
 7. Do not call the LIBERO-oriented `object_location` specialist for metric localization: this single camera is not yet published with calibrated multi-view geometry.
+
+The Controller refreshes the observation while idle and after each action.
+`observation_state` reports availability; missing/expired frames are not proof
+of arrival. The image alone cannot establish metric distance or physical balance.
 
 ## Physical and Safety Constraints
 

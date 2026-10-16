@@ -21,3 +21,4 @@ The skill format and metadata structure follow OpenClaw's conventions to maintai
 | `image` | Capture images and save to workspace |
 | `attach` | Rule-based robot control (geometry-driven motion primitives) |
 | `vla` | VLA policy control (natural language instructions) |
+| `lightnav-sonic-navigation` | Operational Skill: LightNav-0 + SONIC G1 navigation, with native verification and recovery |

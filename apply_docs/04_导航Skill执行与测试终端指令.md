@@ -65,9 +65,8 @@ lightnav_sonic_g1 driver.SonicLightNavDriver
 安装 Main Agent 的导航规则：
 
 ```bash
-mkdir -p /home/embodied/.Emerge/workspace/skills/lightnav-sonic-navigation
-cp /home/embodied/EMERGE-Humanoid/integrations/lightnav_sonic_emerge/workspace_skill/SKILL.md \
-  /home/embodied/.Emerge/workspace/skills/lightnav-sonic-navigation/SKILL.md
+# 导航 Skill 已内置于 Emerge/skills/lightnav-sonic-navigation/SKILL.md
+# 无需复制；旧 workspace 副本会覆盖内置版本，应先备份并核对再迁移。
 ```
 
 验证注册结果：

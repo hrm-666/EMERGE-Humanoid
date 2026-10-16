@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
+import time
 from io import BytesIO
 from pathlib import Path
 from threading import Lock
@@ -21,10 +23,14 @@ class EgoObservationWriter:
         *,
         view_name: str = "ego_view",
         enabled: bool = True,
+        max_age_s: float = 0.75,
     ) -> None:
         self.workspace = Path(workspace).expanduser().resolve()
         self.view_name = view_name
         self.enabled = bool(enabled)
+        if not math.isfinite(max_age_s) or max_age_s <= 0:
+            raise ValueError("max_age_s must be finite and positive")
+        self.max_age_s = max_age_s
         self.directory = self.workspace / "artifacts/observations"
         self.image_path = self.directory / f"{view_name}.png"
         self.manifest_path = self.directory / "observation.json"
@@ -35,7 +41,14 @@ class EgoObservationWriter:
     def revision(self) -> int:
         return self._revision
 
+    def invalidate(self) -> None:
+        """Withdraw stale evidence while leaving the last image for diagnostics."""
+        if self.enabled:
+            with self._lock:
+                self.manifest_path.unlink(missing_ok=True)
+
     def write_jpeg(self, jpeg: bytes) -> Path | None:
+        """Publish RGB with a wall-clock expiry understood by native verifiers."""
         if not self.enabled:
             return None
         if not isinstance(jpeg, bytes) or not jpeg:
@@ -60,7 +73,12 @@ class EgoObservationWriter:
                         image_tmp.unlink()
 
                 self._revision += 1
+                published_at = time.time()
                 manifest = {
+                    "published_at":
+                        published_at,
+                    "expires_at":
+                        published_at + self.max_age_s,
                     "revision":
                         self._revision,
                     "reference_view":
