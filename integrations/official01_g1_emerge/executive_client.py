@@ -12,8 +12,8 @@ import os
 from pathlib import Path
 import re
 import shlex
-import signal
 import subprocess
+import sys
 import threading
 import time
 from typing import Callable, Iterable
@@ -41,6 +41,8 @@ class ExecutiveProcessClient:
         linear_speed_mps: float = 0.12,
         yaw_rate_rad_s: float = 0.25,
         popen_factory: Callable[..., subprocess.Popen[str]] = subprocess.Popen,
+        sudo_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+        stdin_is_tty: Callable[[], bool] | None = None,
     ) -> None:
         self.control_root = Path(control_root).expanduser().resolve()
         if runtime not in {"sim", "real", "dry-run"}:
@@ -51,6 +53,8 @@ class ExecutiveProcessClient:
         self.linear_speed_mps = self._positive(linear_speed_mps, "linear_speed_mps")
         self.yaw_rate_rad_s = self._positive(yaw_rate_rad_s, "yaw_rate_rad_s")
         self._popen_factory = popen_factory
+        self._sudo_runner = sudo_runner
+        self._stdin_is_tty = stdin_is_tty or sys.stdin.isatty
         self._process: subprocess.Popen[str] | None = None
         self._reader: threading.Thread | None = None
         self._condition = threading.Condition()
@@ -79,6 +83,8 @@ class ExecutiveProcessClient:
     def start(self) -> None:
         if self.running:
             return
+        if self.runtime == "sim":
+            self._authenticate_simulation_sudo()
         argv = self._build_argv()
         self._process = self._popen_factory(
             argv,
@@ -88,7 +94,11 @@ class ExecutiveProcessClient:
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
-            start_new_session=True,
+            # Keep the Controller's controlling terminal available to sudo,
+            # stdin remains a pipe for the executive's restricted command
+            # protocol. Keeping the current session preserves its controlling
+            # terminal so the launcher's sudo -v can use the cached ticket.
+            start_new_session=False,
         )
         self._reader = threading.Thread(
             target=self._read_output,
@@ -97,6 +107,24 @@ class ExecutiveProcessClient:
         )
         self._reader.start()
         self.wait_for_state({"READY"}, timeout_s=self.startup_timeout_s)
+
+    def _authenticate_simulation_sudo(self) -> None:
+        """Prompt in the Controller terminal before managing the launcher."""
+        if not self._stdin_is_tty():
+            raise ExecutiveClientError(
+                "simulation startup needs an interactive terminal for sudo. "
+                "Run `sudo -v` in the same terminal, then restart the Controller "
+                "from that terminal."
+            )
+        try:
+            result = self._sudo_runner(["sudo", "-v"], check=False)
+        except OSError as exc:
+            raise ExecutiveClientError(f"cannot run sudo authentication: {exc}") from exc
+        if result.returncode != 0:
+            raise ExecutiveClientError(
+                "sudo authentication failed in the Controller terminal; "
+                "enter the password when prompted and restart the Controller"
+            )
 
     def _build_argv(self) -> list[str]:
         common = [
@@ -281,16 +309,12 @@ class ExecutiveProcessClient:
                     process.stdin.flush()
                 process.wait(timeout=8.0)
             except (BrokenPipeError, OSError, subprocess.TimeoutExpired):
+                process.terminate()
                 try:
-                    os.killpg(process.pid, signal.SIGINT)
-                    process.wait(timeout=5.0)
-                except (OSError, subprocess.TimeoutExpired):
-                    process.terminate()
-                    try:
-                        process.wait(timeout=3.0)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait(timeout=3.0)
+                    process.wait(timeout=3.0)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=3.0)
         with self._condition:
             self._state = "CLOSED"
             self._state_version += 1

@@ -62,17 +62,22 @@ MuJoCo owner, SONIC deploy, GR00T PolicyServer, and LightNav server. Do **not**
 start Terminal 4 (`run_executive.sh`) separately; this Driver starts that same
 script and must be its sole owner.
 
-Before starting the Controller, cache the namespace privilege in the same
-terminal so the managed launcher never needs an agent-provided password:
+Start the Controller from an interactive terminal. Before the managed executive
+starts, the Controller runs `sudo -v` in that same terminal, so sudo can prompt
+there for the password. The executive remains attached to the same terminal
+session while its command input/output use private pipes:
 
 ```bash
-sudo -v
 cd ~/EMERGE-Humanoid
 conda activate EmergePolicy
 python -m robot.controller \
   --driver official01_g1 \
   --driver-config integrations/official01_g1_emerge/driver_sim.json
 ```
+
+If the Controller is launched without a terminal (for example as a background
+service), startup stops with an explicit interactive-terminal error. Run it in
+a terminal so you can answer the sudo prompt.
 
 Then start the Main Agent in another terminal:
 
