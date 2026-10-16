@@ -86,6 +86,19 @@ reached. Invalid requests can return `Failed:` without backend JSON.
 
 ## Verification and Recovery
 
+Allow at most **five navigation attempts per main-line subgoal**, including the
+initial action and all recovery actions. Count dispatched navigation actions
+from ACTION.md after the current mission began, including actions on recovery
+branches; keep this count across turns and replans of the same semantic goal.
+Verification calls do not consume this budget. Do not confuse this total with
+PLAN.md Retries, which counts failures or lack of progress.
+
+After each attempt, refresh state and verify before deciding whether to act
+again. Stop early when the goal is achieved, the user cancels, live inputs are
+unavailable, or no useful supported recovery remains. After the fifth attempt,
+report any unresolved criterion and do not dispatch a sixth action. This is an
+Agent instruction budget, not a controller-enforced action counter.
+
 After every action, re-read `ROBOT_STATE.md` and obtain current visual evidence
 through the native Evaluation Skill:
 
@@ -115,10 +128,13 @@ criterion, reuse that evidence instead of duplicating the call.
 3. For a blocked/no-progress phase, increment its retries and push a localized
    Branch Stack entry using `update_plan`. Each branch needs its own observable
    criterion. Use `update_kind="replan"` when changing the Main Line itself.
-4. After two consecutive no-progress calls for the same intent, change strategy
-   or report the missing capability. Do not invent a scan/turn action, use an
-   unsupported manipulation primitive, reset retries, or increase budgets as
-   the sole response to wrong-target behavior or absent observations.
+4. After two consecutive no-progress calls, change strategy before continuing
+   within the five-attempt budget. The planning tool's retry warning requires
+   reassessment/replanning, not an automatic termination after three attempts.
+   Use a supported, evidence-grounded recovery with its own observable criterion.
+   Do not invent a scan/turn primitive, use an unsupported manipulation action,
+   reset retries, or increase budgets as the sole response to wrong-target
+   behavior or absent observations.
 
 This Skill is simulation-only. Hardware deployment belongs to future `real-dev`
 work and is not supplied by this Skill.
