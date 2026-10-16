@@ -12,7 +12,7 @@ import cv2
 import mujoco
 import numpy as np
 
-from robot.vla.lightnav_sonic import official01_observation
+from robot.navigation.lightnav_sonic import official01_observation
 from scripts.LightNav_eval import tabletop
 from scripts.LightNav_eval import tabletop_evaluate
 from scripts.LightNav_eval import tabletop_logging

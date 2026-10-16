@@ -8,8 +8,8 @@ import mujoco
 import numpy as np
 import zmq
 
-from robot.vla.lightnav_sonic import lightnav_ws
-from robot.vla.lightnav_sonic import official01_observation
+from robot.navigation.lightnav_sonic import lightnav_ws
+from robot.navigation.lightnav_sonic import official01_observation
 from scripts.LightNav_eval import tabletop
 from scripts.LightNav_eval import tabletop_reset
 from scripts.LightNav_eval import tabletop_sim

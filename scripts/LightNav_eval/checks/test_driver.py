@@ -4,7 +4,7 @@ import tempfile
 import unittest
 
 from robot.drivers import lightnav_sonic_driver as driver
-from robot.vla.lightnav_sonic import navigation_backend
+from robot.navigation.lightnav_sonic import navigation_backend
 
 
 class _Backend:

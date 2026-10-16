@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Any
 from typing import Mapping
 
-from robot.vla.lightnav_sonic.adapter import LightNav2SonicAdapter
-from robot.vla.lightnav_sonic.lightnav_ws import LightNavProtocolError
-from robot.vla.lightnav_sonic.lightnav_ws import parse_next_response
+from robot.navigation.lightnav_sonic.adapter import LightNav2SonicAdapter
+from robot.navigation.lightnav_sonic.lightnav_ws import LightNavProtocolError
+from robot.navigation.lightnav_sonic.lightnav_ws import parse_next_response
 
 
 def build_parser() -> argparse.ArgumentParser:

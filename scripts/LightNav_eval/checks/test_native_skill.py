@@ -31,7 +31,7 @@ from Emerge.subagents.task_verification.tools import observation
 from Emerge.utils import action_queue
 from robot import controller
 from robot.drivers import lightnav_sonic_driver as driver
-from robot.vla.lightnav_sonic import navigation_backend
+from robot.navigation.lightnav_sonic import navigation_backend
 from scripts.LightNav_eval.checks import test_navigation_backend
 from scripts.LightNav_eval.checks import test_observation_writer
 

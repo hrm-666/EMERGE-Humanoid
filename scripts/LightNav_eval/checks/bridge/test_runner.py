@@ -2,7 +2,7 @@ import base64
 import math
 import unittest
 
-from robot.vla.lightnav_sonic import feedback as runner
+from robot.navigation.lightnav_sonic import feedback as runner
 
 
 class RunnerInputTests(unittest.TestCase):

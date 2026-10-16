@@ -1,6 +1,6 @@
 # 实验室仿真入口
 
-在 `embodied@embodied-MS-7E06:~/EMERGE-Humanoid`、`humanoid-dev` 使用本说明。
+在 `embodied@embodied-MS-7E06:~/EMERGE-Humanoid`、`humanoid-nav` 使用本说明。
 原始代码和历史运行产物仍在 `~/LightNav-0`；新的仿真代码统一在本仓库维护。
 
 ## 验证

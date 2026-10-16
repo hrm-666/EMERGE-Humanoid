@@ -6,11 +6,11 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from robot.vla.lightnav_sonic import camera
-from robot.vla.lightnav_sonic import feedback as runner
-from robot.vla.lightnav_sonic import navigation_backend
-from robot.vla.lightnav_sonic import observation_writer
-from robot.vla.lightnav_sonic import official01_observation
+from robot.navigation.lightnav_sonic import camera
+from robot.navigation.lightnav_sonic import feedback as runner
+from robot.navigation.lightnav_sonic import navigation_backend
+from robot.navigation.lightnav_sonic import observation_writer
+from robot.navigation.lightnav_sonic import official01_observation
 
 
 class CameraTransportTest(unittest.TestCase):

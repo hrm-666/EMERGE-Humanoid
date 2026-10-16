@@ -15,11 +15,11 @@ import time
 import tty
 from dataclasses import dataclass
 
-from robot.vla.lightnav_sonic.adapter import SONIC_SLOW_WALK_MODE
-from robot.vla.lightnav_sonic.adapter import LightNav2SonicAdapter
-from robot.vla.lightnav_sonic.adapter import SonicPlannerCommand
-from robot.vla.lightnav_sonic.feedback import SonicYawSubscriber
-from robot.vla.lightnav_sonic.sonic_zmq import SonicZmqPublisher
+from robot.navigation.lightnav_sonic.adapter import SONIC_SLOW_WALK_MODE
+from robot.navigation.lightnav_sonic.adapter import LightNav2SonicAdapter
+from robot.navigation.lightnav_sonic.adapter import SonicPlannerCommand
+from robot.navigation.lightnav_sonic.feedback import SonicYawSubscriber
+from robot.navigation.lightnav_sonic.sonic_zmq import SonicZmqPublisher
 
 _EPSILON = 1e-8
 

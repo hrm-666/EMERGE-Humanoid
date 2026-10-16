@@ -11,7 +11,7 @@ from pathlib import Path
 from PIL import Image
 from PIL import ImageTk
 
-from robot.vla.lightnav_sonic.official01_observation import Official01Subscriber
+from robot.navigation.lightnav_sonic import official01_observation
 
 
 class EgoViewer:
@@ -93,7 +93,8 @@ def main() -> None:
                 f"--{name.replace('_', '-')} must be finite and positive")
     if args.refresh_hz > 100:
         parser.error("--refresh-hz must not exceed 100")
-    subscriber = Official01Subscriber(args.observation_endpoint)
+    subscriber = official01_observation.Official01Subscriber(
+        args.observation_endpoint)
     try:
         root = tk.Tk()
         viewer = EgoViewer(root, subscriber, args)

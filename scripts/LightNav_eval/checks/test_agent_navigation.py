@@ -8,7 +8,7 @@ from pathlib import Path
 from Emerge.agent.tools.embodied import EmbodiedActionTool
 from Emerge.utils.action_queue import infer_terminal_status
 from Emerge.utils.action_queue import update_action_document
-from robot.vla.lightnav_sonic import navigation_backend
+from robot.navigation.lightnav_sonic import navigation_backend
 from scripts.LightNav_eval.checks import test_driver
 
 

@@ -2,8 +2,8 @@ import json
 import struct
 import unittest
 
-from robot.vla.lightnav_sonic import adapter
-from robot.vla.lightnav_sonic import sonic_zmq
+from robot.navigation.lightnav_sonic import adapter
+from robot.navigation.lightnav_sonic import sonic_zmq
 
 
 def _header(packet: bytes, topic: bytes) -> dict:

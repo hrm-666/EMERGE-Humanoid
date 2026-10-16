@@ -22,12 +22,12 @@ from pathlib import Path
 from typing import Any
 from typing import Sequence
 
-from robot.vla.lightnav_sonic.adapter import AdapterLimits
-from robot.vla.lightnav_sonic.adapter import LightNav2SonicAdapter
-from robot.vla.lightnav_sonic.feedback import SonicCameraSubscriber
-from robot.vla.lightnav_sonic.feedback import SonicYawSubscriber
-from robot.vla.lightnav_sonic.lightnav_ws import LightNavWsClient
-from robot.vla.lightnav_sonic.sonic_zmq import SonicZmqPublisher
+from robot.navigation.lightnav_sonic.adapter import AdapterLimits
+from robot.navigation.lightnav_sonic.adapter import LightNav2SonicAdapter
+from robot.navigation.lightnav_sonic.feedback import SonicCameraSubscriber
+from robot.navigation.lightnav_sonic.feedback import SonicYawSubscriber
+from robot.navigation.lightnav_sonic.lightnav_ws import LightNavWsClient
+from robot.navigation.lightnav_sonic.sonic_zmq import SonicZmqPublisher
 
 
 def _command_log(command: Any, *, waypoint: Sequence[float] | None,

@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from robot.vla.lightnav_sonic import official01_observation
+from robot.navigation.lightnav_sonic import official01_observation
 from scripts.LightNav_eval import ego_viewer
 
 

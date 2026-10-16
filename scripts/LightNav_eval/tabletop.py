@@ -23,15 +23,14 @@ from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 
-from robot.vla.lightnav_sonic.adapter import AdapterLimits
-from robot.vla.lightnav_sonic.adapter import LightNav2SonicAdapter
-from robot.vla.lightnav_sonic.adapter import SonicPlannerCommand
-from robot.vla.lightnav_sonic.feedback import SonicYawSubscriber
-from robot.vla.lightnav_sonic.lightnav_ws import LightNavReply
-from robot.vla.lightnav_sonic.lightnav_ws import LightNavWsClient
-from robot.vla.lightnav_sonic.official01_observation import ObservationFrame
-from robot.vla.lightnav_sonic.official01_observation import Official01Subscriber
-from robot.vla.lightnav_sonic.sonic_zmq import SonicZmqPublisher
+from robot.navigation.lightnav_sonic import official01_observation
+from robot.navigation.lightnav_sonic.adapter import AdapterLimits
+from robot.navigation.lightnav_sonic.adapter import LightNav2SonicAdapter
+from robot.navigation.lightnav_sonic.adapter import SonicPlannerCommand
+from robot.navigation.lightnav_sonic.feedback import SonicYawSubscriber
+from robot.navigation.lightnav_sonic.lightnav_ws import LightNavReply
+from robot.navigation.lightnav_sonic.lightnav_ws import LightNavWsClient
+from robot.navigation.lightnav_sonic.sonic_zmq import SonicZmqPublisher
 
 from .tabletop_logging import TabletopRunLog
 from .tabletop_pose import RobotPose
@@ -206,7 +205,8 @@ class TabletopControl:
         self.manual_until = time.monotonic() + self.args.keyboard_watchdog_s
 
     def accept(self, generation: int, reply: LightNavReply,
-               frame: ObservationFrame, capture_yaw: float) -> str:
+               frame: official01_observation.ObservationFrame,
+               capture_yaw: float) -> str:
         if generation != self.generation or self.mode != "navigation":
             return "discarded: cancelled navigation"
         if time.monotonic() >= self.navigation_until:
@@ -589,7 +589,8 @@ def run(args: argparse.Namespace) -> int:
     output.mkdir(parents=True, exist_ok=False)
     state = TabletopControl(args)
     worker = NavigationWorker(args)
-    observation = Official01Subscriber(args.observation_endpoint)
+    observation = official01_observation.Official01Subscriber(
+        args.observation_endpoint)
     feedback = SonicYawSubscriber(args.sonic_feedback_endpoint, "g1_debug")
     pose_feedback = TabletopPoseSubscriber(args.pose_endpoint)
     reset_client = TabletopResetClient(args.reset_endpoint)
@@ -600,8 +601,8 @@ def run(args: argparse.Namespace) -> int:
     publisher = None
     console = None
     pending: Future | None = None
-    request: tuple[int, ObservationFrame, float, RobotPose | None,
-                   str] | None = None
+    request: tuple[int, official01_observation.ObservationFrame, float,
+                   RobotPose | None, str] | None = None
     instruction = args.instruction
     last_pose: RobotPose | None = None
     ready = False

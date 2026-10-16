@@ -9,8 +9,8 @@ import msgpack
 import numpy as np
 from PIL import Image
 
-from robot.vla.lightnav_sonic import lightnav_ws
-from robot.vla.lightnav_sonic import official01_observation
+from robot.navigation.lightnav_sonic import lightnav_ws
+from robot.navigation.lightnav_sonic import official01_observation
 from scripts.LightNav_eval import tabletop
 
 

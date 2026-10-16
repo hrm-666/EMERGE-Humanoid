@@ -55,7 +55,7 @@
     {
       "source": "/home/embodied/LightNav-0/lightnav_sonic_bridge/official01_observation.py",
       "sha256": "a0f0568e92a20f30d18c15748df9b3e886b74b917f17093318d42ff42802277a",
-      "destination": "robot/vla/lightnav_sonic/official01_observation.py"
+      "destination": "robot/navigation/lightnav_sonic/official01_observation.py"
     },
     {
       "source": "/home/embodied/LightNav-0/lightnav_sonic_bridge/ego_viewer.py",
@@ -110,7 +110,7 @@
     {
       "source": "/home/embodied/LightNav-0/lightnav_sonic_bridge/lightnav_ws.py",
       "sha256": "54a1283e1b4369e03e548dd914b734bd48c8c9b99d725c3ddd7f070f3feeac50",
-      "destination": "robot/vla/lightnav_sonic/lightnav_ws.py"
+      "destination": "robot/navigation/lightnav_sonic/lightnav_ws.py"
     }
   ]
 }

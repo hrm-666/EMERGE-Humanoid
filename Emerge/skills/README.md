@@ -21,4 +21,14 @@ The skill format and metadata structure follow OpenClaw's conventions to maintai
 | `image` | Capture images and save to workspace |
 | `attach` | Rule-based robot control (geometry-driven motion primitives) |
 | `vla` | VLA policy control (natural language instructions) |
-| `lightnav-sonic-navigation` | Operational Skill: LightNav-0 + SONIC G1 navigation, with native verification and recovery |
+| [lightnav-sonic-navigation](lightnav-sonic-navigation/SKILL.md) | Operational Skill: simulated G1 VLN with LightNav-0 + SONIC; up to five navigation attempts with verification and recovery |
+
+## Navigation Skill
+
+The navigation Skill is maintained on humanoid-nav. Its runtime is in
+robot/navigation/lightnav_sonic, and its native Driver is in robot/drivers.
+Model sources are pinned under third_party. No external-plugin registration or
+workspace Skill copy is needed.
+
+See the [navigation guide](../../scripts/LightNav_eval/README.md) and
+[simulation startup instructions](../../scripts/LightNav_eval/SIMULATION.md).

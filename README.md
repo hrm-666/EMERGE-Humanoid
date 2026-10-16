@@ -41,21 +41,61 @@ Controller, while live visual observations and simulator success signals close
 the loop, allowing the robot to perceive, decide, act, and correct itself through
 continuous interaction.*
 
-## Humanoid Navigation Skill (humanoid-dev)
+## Humanoid Navigation Skill (humanoid-nav)
 
-LightNav-0 and SONIC provide the navigation capability exposed through the
-built-in lightnav-sonic-navigation Skill. Third-party sources are pinned under
-third_party; the Driver and client follow the existing robot package layout.
+This branch contains the simulation navigation work for Unitree G1.
+[lightnav-sonic-navigation](Emerge/skills/lightnav-sonic-navigation/SKILL.md)
+is an Operational Skill: the main Agent plans a navigation phase, calls the
+native execute_robot_action tool with navigate_vln, and verifies the result.
+LightNav-0 supplies visual-language navigation (VLN) waypoints; SONIC executes
+locomotion. Navigation runtime code belongs under robot/navigation, separately
+from the manipulation-policy execution code in robot/vla.
 
-- [Architecture, dependencies, and validation](scripts/LightNav_eval/README.md)
-- [Apple-table simulation and Agent task instructions](scripts/LightNav_eval/SIMULATION.md)
-- [Historical experiment notes](docs/lightnav/notes/README.md)
+| Component | Location |
+| --- | --- |
+| Skill contract | [SKILL.md](Emerge/skills/lightnav-sonic-navigation/SKILL.md) |
+| Navigation runtime | [robot/navigation/lightnav_sonic](robot/navigation/lightnav_sonic/) |
+| Native Controller driver | [lightnav_sonic_driver.py](robot/drivers/lightnav_sonic_driver.py) |
+| Apple-table configuration | [lightnav_sonic_tabletop.json](dev/lightnav_sonic_tabletop.json) |
+| Upstream model sources | third_party/lightnav and third_party/sonic (pinned submodules) |
+| Simulation and evaluation | [scripts/LightNav_eval](scripts/LightNav_eval/) |
 
-The recorded Astra run exercised planning, two real GPU navigation actions,
-visual verification, and recovery; both verifications were uncertain. Arrival
-was not established. The current Skill allows up to five attempts with
-verification after each. This migration is verified offline; hardware deployment
-and a new five-attempt real-model run have not been performed.
+~~~text
+User task -> main Agent reads Skill -> update_plan
+ -> execute_robot_action(navigate_vln) -> Controller / Driver
+ -> RGB + instruction -> LightNav -> waypoint -> SONIC -> G1 motion
+ -> fresh RGB -> task_verification -> progress, recovery, or stop
+~~~
+
+For the navigation setup, use the
+[navigation dependencies and architecture guide](scripts/LightNav_eval/README.md)
+and [apple-table startup instructions](scripts/LightNav_eval/SIMULATION.md).
+The general installation and LIBERO quick start below describe the original
+manipulation workflow; they are not the navigation startup sequence.
+
+After the simulator, SONIC, LightNav service, and navigation Controller are
+ready, submit a task such as:
+
+> 在当前苹果桌仿真中，使用 lightnav-sonic-navigation，让 G1 到苹果桌前停下，
+> 不抓取、不触碰。最多 5 次导航动作（含首次和恢复），每次最多 120 ticks、
+> 90 秒。每次刷新状态并视觉验证；两次无进展后改变策略。
+> 第五次仍不能确认则停止报告，成功或无有效恢复方式时提前停止。
+
+The five-attempt limit is a Skill instruction for the Agent, not a hard counter
+in the Controller. Each attempt requires verification; LightNav stop and an
+exhausted action budget do not prove arrival. Start a new task with this budget
+instead of reusing the old task's explicit two-attempt stop instruction.
+
+Validation: 61 core checks and 80 simulation checks pass, together with Ruff,
+Google-style YAPF, and an installed-wheel Driver import check. The earlier Astra
+run exercised two real GPU navigation actions, verification, and recovery; both
+verifications were uncertain, so arrival was not established. The directory
+migration and five-attempt workflow have not been rerun with real models.
+Hardware deployment remains future work on real-dev.
+
+[Historical experiment notes](docs/lightnav/notes/README.md) are retained for
+reference; their old directory and registration commands are superseded by the
+current navigation guide.
 
 ## Installation
 
@@ -63,7 +103,7 @@ and a new five-attempt real-model run have not been performed.
 
 ```bash
 git clone --recurse-submodules \
-  --branch humanoid-dev \
+  --branch humanoid-nav \
   https://github.com/hrm-666/EMERGE-Humanoid.git
 cd EMERGE-Humanoid
 

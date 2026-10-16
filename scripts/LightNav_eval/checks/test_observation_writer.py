@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from robot.vla.lightnav_sonic import observation_writer
+from robot.navigation.lightnav_sonic import observation_writer
 
 
 def _jpeg_bytes() -> bytes:

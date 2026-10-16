@@ -1,7 +1,7 @@
 import math
 import unittest
 
-from robot.vla.lightnav_sonic import adapter
+from robot.navigation.lightnav_sonic import adapter
 from scripts.LightNav_eval import teleop
 
 

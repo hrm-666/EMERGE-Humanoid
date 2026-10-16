@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from robot.vla.lightnav_sonic import navigation_backend
+from robot.navigation.lightnav_sonic import navigation_backend
 
 
 class _SequenceSource:

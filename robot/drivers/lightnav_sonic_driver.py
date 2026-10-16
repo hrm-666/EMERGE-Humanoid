@@ -10,11 +10,11 @@ from typing import Any
 
 from robot.drivers.base_driver import BaseDriver
 from robot.drivers.base_driver import CancelCheck
-from robot.vla.lightnav_sonic import camera
-from robot.vla.lightnav_sonic.navigation_backend import NavigationBackend
-from robot.vla.lightnav_sonic.navigation_backend import NavigationConfig
-from robot.vla.lightnav_sonic.navigation_backend import NavigationResult
-from robot.vla.lightnav_sonic.observation_writer import EgoObservationWriter
+from robot.navigation.lightnav_sonic import camera
+from robot.navigation.lightnav_sonic import observation_writer
+from robot.navigation.lightnav_sonic.navigation_backend import NavigationBackend
+from robot.navigation.lightnav_sonic.navigation_backend import NavigationConfig
+from robot.navigation.lightnav_sonic.navigation_backend import NavigationResult
 
 
 class SonicLightNavDriver(BaseDriver):
@@ -100,7 +100,7 @@ class SonicLightNavDriver(BaseDriver):
                                                     "default_max_steps")
         self.max_action_steps = self._positive_int(max_action_steps,
                                                    "max_action_steps")
-        self._observation_writer = EgoObservationWriter(
+        self._observation_writer = observation_writer.EgoObservationWriter(
             self.workspace,
             view_name=camera_name,
             enabled=publish_observations,

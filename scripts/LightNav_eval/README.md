@@ -1,5 +1,7 @@
 # LightNav-0 + SONIC navigation
 
+Maintained on the humanoid-nav branch.
+
 The built-in Operational Skill is
 [Emerge/skills/lightnav-sonic-navigation/SKILL.md](../../Emerge/skills/lightnav-sonic-navigation/SKILL.md).
 A Skill describes when and how the Agent uses tools; it does not contain model
@@ -12,7 +14,7 @@ OpenPI separation of Skill, driver, policy client, and third-party source.
 | --- | --- |
 | Agent instructions | Emerge/skills/lightnav-sonic-navigation/SKILL.md |
 | Built-in BaseDriver | robot/drivers/lightnav_sonic_driver.py |
-| Policy client, bounded execution, observations, SONIC adapter | robot/vla/lightnav_sonic/ |
+| Policy client, bounded execution, observations, SONIC adapter | robot/navigation/lightnav_sonic/ |
 | Robot capability profile | robot/profiles/lightnav_sonic_g1.md |
 | Endpoint configurations | dev/lightnav_sonic_tabletop.json, dev/lightnav_sonic_procthor.json |
 | Simulation launchers, evaluation, recording, checks | scripts/LightNav_eval/ |
@@ -26,8 +28,10 @@ or workspace Skill copy. A legacy workspace Skill can still override the built-i
 Skill: review it before use.
 
 LightNav produces local navigation waypoints; SONIC provides locomotion. They
-are distinct from OpenPI's manipulation policy, but use the same repository
-layers. The model is served by the upstream LightNav WebSocket server directly;
+are distinct from OpenPI's manipulation policy. Navigation execution belongs
+under robot/navigation; robot/vla remains the manipulation-policy execution
+package. Both use the same Skill, Driver, and third-party source layers. The
+model is served by the upstream LightNav WebSocket server directly;
 no duplicate inference implementation is required in external_model_server.
 
 ## Dependencies

@@ -1,7 +1,7 @@
 import math
 import unittest
 
-from robot.vla.lightnav_sonic import adapter
+from robot.navigation.lightnav_sonic import adapter
 
 
 class LightNav2SonicAdapterTests(unittest.TestCase):

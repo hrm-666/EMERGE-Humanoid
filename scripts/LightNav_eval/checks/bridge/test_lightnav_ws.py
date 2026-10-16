@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import Mock
 from unittest.mock import patch
 
-from robot.vla.lightnav_sonic import lightnav_ws
+from robot.navigation.lightnav_sonic import lightnav_ws
 
 
 def _response(*, seq=4, stop=False, actions=None, rc=0):
