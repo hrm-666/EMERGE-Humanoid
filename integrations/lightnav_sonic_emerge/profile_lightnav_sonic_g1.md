@@ -24,7 +24,8 @@ Parameters:
 {
   "instruction": "move next to the table and stop",
   "max_steps": 120,
-  "control_hz": 4.0
+  "control_hz": 4.0,
+  "max_runtime_s": 120.0
 }
 ```
 
@@ -57,3 +58,7 @@ Parameters:
 - If the target is not visible or the robot makes no useful progress, keep the main navigation subgoal active and create a localized recovery branch.
 - Do not repeat the same instruction indefinitely. After two no-progress attempts, change the viewpoint or report that an explicit scan/turn primitive is required.
 - The original downward-looking `head_camera` is a known limitation. Treat ambiguous views as uncertainty, not success.
+
+`max_runtime_s` defaults to 120 seconds and may not exceed the driver runtime ceiling.
+Runtime/cancellation are checked after inference; an in-flight request may take up to
+`inference_timeout_s` (default 10 seconds) to return before cleanup.

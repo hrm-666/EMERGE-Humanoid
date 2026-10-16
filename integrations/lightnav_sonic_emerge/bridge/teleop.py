@@ -8,18 +8,18 @@ planner commands to help position or reorient G1 before another VLN attempt.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import math
 import select
-import sys
 import termios
 import time
 import tty
+from dataclasses import dataclass
 
-from .adapter import SONIC_SLOW_WALK_MODE, LightNav2SonicAdapter, SonicPlannerCommand
+from .adapter import SONIC_SLOW_WALK_MODE
+from .adapter import LightNav2SonicAdapter
+from .adapter import SonicPlannerCommand
 from .runner import SonicYawSubscriber
 from .sonic_zmq import SonicZmqPublisher
-
 
 _EPSILON = 1e-8
 
@@ -48,7 +48,8 @@ class TeleopState:
         self.lateral = 0.0
         self.target_yaw = robot_yaw
 
-    def set_translation(self, forward: float, lateral: float, robot_yaw: float) -> None:
+    def set_translation(self, forward: float, lateral: float,
+                        robot_yaw: float) -> None:
         self.forward = forward
         self.lateral = lateral
         # Selecting a movement key cancels any unfinished turn and faces the
@@ -74,7 +75,8 @@ def command_from_state(
     facing = (math.cos(target_yaw), math.sin(target_yaw), 0.0)
     if not state.has_translation:
         if abs(wrap_angle(target_yaw - robot_yaw)) <= heading_tolerance_rad:
-            return LightNav2SonicAdapter().idle(robot_yaw, reason="keyboard stop")
+            return LightNav2SonicAdapter().idle(robot_yaw,
+                                                reason="keyboard stop")
         return SonicPlannerCommand(
             mode=SONIC_SLOW_WALK_MODE,
             movement_direction=(0.0, 0.0, 0.0),
@@ -113,7 +115,8 @@ class CbreakInput:
         try:
             self._stream = open("/dev/tty", "r", encoding="utf-8", buffering=1)
         except OSError as exc:
-            raise RuntimeError("teleop requires a controlling interactive terminal") from exc
+            raise RuntimeError(
+                "teleop requires a controlling interactive terminal") from exc
         self._fd = self._stream.fileno()
         self._settings = termios.tcgetattr(self._fd)
         tty.setcbreak(self._fd)
@@ -127,7 +130,8 @@ class CbreakInput:
                 keys.append(key)
         return keys
 
-    def __exit__(self, _type: object, _value: object, _traceback: object) -> None:
+    def __exit__(self, _type: object, _value: object,
+                 _traceback: object) -> None:
         termios.tcsetattr(self._fd, termios.TCSADRAIN, self._settings)
         self._stream.close()
 
@@ -135,7 +139,8 @@ class CbreakInput:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sonic-bind", default="tcp://*:5556")
-    parser.add_argument("--sonic-feedback-endpoint", default="tcp://127.0.0.1:5557")
+    parser.add_argument("--sonic-feedback-endpoint",
+                        default="tcp://127.0.0.1:5557")
     parser.add_argument("--sonic-feedback-topic", default="g1_debug")
     parser.add_argument("--control-hz", type=float, default=4.0)
     parser.add_argument("--speed-mps", type=float, default=0.18)
@@ -153,11 +158,17 @@ def _validate_args(args: argparse.Namespace) -> None:
         "--heading-tolerance-deg": args.heading_tolerance_deg,
         "--input-timeout-s": args.input_timeout_s,
     }
-    invalid = [name for name, value in positive.items() if not math.isfinite(value) or value <= 0.0]
+    invalid = [
+        name for name, value in positive.items()
+        if not math.isfinite(value) or value <= 0.0
+    ]
     if invalid:
-        raise ValueError(f"arguments must be finite and positive: {', '.join(invalid)}")
+        raise ValueError(
+            f"arguments must be finite and positive: {', '.join(invalid)}")
     if args.speed_mps > 0.25:
-        raise ValueError("--speed-mps must not exceed the bridge's conservative 0.25 m/s limit")
+        raise ValueError(
+            "--speed-mps must not exceed the bridge's conservative 0.25 m/s limit"
+        )
 
 
 def _print_help() -> None:
@@ -167,7 +178,8 @@ def _print_help() -> None:
     )
 
 
-def _handle_key(key: str, state: TeleopState, yaw: float, turn_step_rad: float) -> bool:
+def _handle_key(key: str, state: TeleopState, yaw: float,
+                turn_step_rad: float) -> bool:
     """Apply a keypress. Return ``True`` when the operator requests exit."""
 
     lower = key.lower()
@@ -205,11 +217,14 @@ def run(args: argparse.Namespace) -> int:
     heading_tolerance_rad = math.radians(args.heading_tolerance_deg)
     adapter = LightNav2SonicAdapter()
     publisher = SonicZmqPublisher(args.sonic_bind)
-    yaw_source = SonicYawSubscriber(args.sonic_feedback_endpoint, args.sonic_feedback_topic)
+    yaw_source = SonicYawSubscriber(args.sonic_feedback_endpoint,
+                                    args.sonic_feedback_topic)
     state = TeleopState(speed_mps=args.speed_mps)
     last_yaw: float | None = None
     try:
-        print(f"SONIC keyboard teleop bound at {args.sonic_bind}; waiting for planner subscriber")
+        print(
+            f"SONIC keyboard teleop bound at {args.sonic_bind}; waiting for planner subscriber"
+        )
         publisher.activate_planner()
         _print_help()
         with CbreakInput() as keyboard:
@@ -217,7 +232,10 @@ def run(args: argparse.Namespace) -> int:
                 tick_started = time.monotonic()
                 yaw = yaw_source.latest(args.input_timeout_s)
                 if yaw is None:
-                    publisher.send_idle(adapter.idle(last_yaw, reason="stale or missing robot yaw feedback"))
+                    publisher.send_idle(
+                        adapter.idle(
+                            last_yaw,
+                            reason="stale or missing robot yaw feedback"))
                     print("idle: stale or missing robot yaw feedback")
                 else:
                     last_yaw = yaw
@@ -241,7 +259,8 @@ def run(args: argparse.Namespace) -> int:
         return 130
     finally:
         try:
-            publisher.send_idle(adapter.idle(last_yaw, reason="keyboard teleop shutdown"))
+            publisher.send_idle(
+                adapter.idle(last_yaw, reason="keyboard teleop shutdown"))
         finally:
             publisher.close()
             yaw_source.close()

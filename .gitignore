@@ -27,3 +27,7 @@ checkpoints
 .condaartifacts/
 artifacts/
 .DS_Store
+
+# Local navigation recordings and generated simulation products
+/outputs/
+MUJOCO_LOG.TXT

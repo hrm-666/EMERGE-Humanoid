@@ -49,6 +49,8 @@ SONIC whole-body control on a Unitree G1. The integration keeps both upstream
 policy repositories unchanged and includes a deterministic, real-model
 ProcTHOR test path.
 
+- [仿真代码整理、论文接口核对与分支约定](apply_docs/06_仿真代码整理与分支约定.md)
+- [当前苹果桌与 ProcTHOR 仿真入口](integrations/lightnav_sonic_emerge/SIMULATION.md)
 - [Integration overview and reproducible quick start](integrations/lightnav_sonic_emerge/README.md)
 - [中文执行与测试终端指令](apply_docs/04_导航Skill执行与测试终端指令.md)
 - [中文实现文件与改动说明](apply_docs/05_导航Skill实现文件与改动说明.md)

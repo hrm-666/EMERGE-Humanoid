@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 import json
 import math
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from robot.drivers.base_driver import BaseDriver, CancelCheck
+from robot.drivers.base_driver import BaseDriver
+from robot.drivers.base_driver import CancelCheck
 
 try:
-    from .navigation_backend import NavigationBackend, NavigationConfig, NavigationResult
+    from .navigation_backend import NavigationBackend
+    from .navigation_backend import NavigationConfig
+    from .navigation_backend import NavigationResult
     from .observation_writer import EgoObservationWriter
 except ImportError:  # External-plugin loading adds this directory to sys.path.
-    from navigation_backend import NavigationBackend, NavigationConfig, NavigationResult
+    from navigation_backend import NavigationBackend
+    from navigation_backend import NavigationConfig
+    from navigation_backend import NavigationResult
     from observation_writer import EgoObservationWriter
 
 
@@ -38,9 +43,12 @@ class SonicLightNavDriver(BaseDriver):
         control_hz: float = 4.0,
         input_timeout_s: float = 0.75,
         max_stale_ticks: int = 8,
+        inference_timeout_s: float = 10.0,
+        max_action_runtime_s: float = 120.0,
         default_max_steps: int = 120,
         max_action_steps: int = 120,
-        elastic_band_release_file: str | Path | None = "/tmp/lightnav_sonic_release",
+        elastic_band_release_file: str | Path |
+        None = "/tmp/lightnav_sonic_release",
         publish_observations: bool = True,
         profile_path: str | Path | None = None,
         **_kwargs: Any,
@@ -50,33 +58,45 @@ class SonicLightNavDriver(BaseDriver):
         self.workspace = Path(workspace).expanduser().resolve()
 
         own_dir = Path(__file__).resolve().parent
-        configured_profile = Path(profile_path).expanduser() if profile_path else (
-            own_dir / "profile_lightnav_sonic_g1.md"
-        )
+        configured_profile = Path(profile_path).expanduser(
+        ) if profile_path else (own_dir / "profile_lightnav_sonic_g1.md")
         if not configured_profile.is_absolute():
             configured_profile = own_dir / configured_profile
         self._profile_path = configured_profile.resolve()
         self._base_config = {
-            "lightnav_server": lightnav_server,
-            "camera_endpoint": camera_endpoint,
-            "camera_name": camera_name,
-            "sonic_feedback_endpoint": sonic_feedback_endpoint,
-            "sonic_feedback_topic": sonic_feedback_topic,
-            "sonic_bind": sonic_bind,
-            "client_id": client_id,
-            "control_hz": self._positive_float(control_hz, "control_hz"),
-            "input_timeout_s": self._positive_float(input_timeout_s, "input_timeout_s"),
-            "max_stale_ticks": self._positive_int(max_stale_ticks, "max_stale_ticks"),
-            "elastic_band_release_file": (
-                Path(elastic_band_release_file).expanduser().resolve()
-                if elastic_band_release_file
-                else None
-            ),
+            "lightnav_server":
+                lightnav_server,
+            "camera_endpoint":
+                camera_endpoint,
+            "camera_name":
+                camera_name,
+            "sonic_feedback_endpoint":
+                sonic_feedback_endpoint,
+            "sonic_feedback_topic":
+                sonic_feedback_topic,
+            "sonic_bind":
+                sonic_bind,
+            "client_id":
+                client_id,
+            "control_hz":
+                self._positive_float(control_hz, "control_hz"),
+            "input_timeout_s":
+                self._positive_float(input_timeout_s, "input_timeout_s"),
+            "max_stale_ticks":
+                self._positive_int(max_stale_ticks, "max_stale_ticks"),
+            "inference_timeout_s":
+                self._positive_float(inference_timeout_s,
+                                     "inference_timeout_s"),
+            "elastic_band_release_file":
+                (Path(elastic_band_release_file).expanduser().resolve()
+                 if elastic_band_release_file else None),
         }
-        self.default_max_steps = self._positive_int(
-            default_max_steps, "default_max_steps"
-        )
-        self.max_action_steps = self._positive_int(max_action_steps, "max_action_steps")
+        self.max_action_runtime_s = self._positive_float(
+            max_action_runtime_s, "max_action_runtime_s")
+        self.default_max_steps = self._positive_int(default_max_steps,
+                                                    "default_max_steps")
+        self.max_action_steps = self._positive_int(max_action_steps,
+                                                   "max_action_steps")
         self._observation_writer = EgoObservationWriter(
             self.workspace,
             view_name=camera_name,
@@ -141,11 +161,18 @@ class SonicLightNavDriver(BaseDriver):
             return "Failed: navigate_vln requires a non-empty instruction"
         try:
             max_steps = self._positive_int(
-                params.get("max_steps", self.default_max_steps), "max_steps"
-            )
+                params.get("max_steps", self.default_max_steps), "max_steps")
             if max_steps > self.max_action_steps:
                 raise ValueError(
                     f"max_steps cannot exceed configured limit {self.max_action_steps}"
+                )
+            max_runtime_s = self._positive_float(
+                params.get("max_runtime_s", min(120.0,
+                                                self.max_action_runtime_s)),
+                "max_runtime_s")
+            if max_runtime_s > self.max_action_runtime_s:
+                raise ValueError(
+                    f"max_runtime_s cannot exceed configured limit {self.max_action_runtime_s}"
                 )
             control_hz = self._positive_float(
                 params.get("control_hz", self._base_config["control_hz"]),
@@ -156,6 +183,7 @@ class SonicLightNavDriver(BaseDriver):
 
         config_values = dict(self._base_config)
         config_values["control_hz"] = control_hz
+        config_values["max_runtime_s"] = max_runtime_s
         config = NavigationConfig(**config_values)
         self._connection_state["status"] = "running"
         self._nav_state.update(
@@ -174,18 +202,16 @@ class SonicLightNavDriver(BaseDriver):
             cancel_check=cancel_check,
             state_callback=self._receive_backend_state,
         )
-        self._connection_state["status"] = (
-            "ready" if result.status != "failed" else "degraded"
-        )
+        self._connection_state["status"] = ("ready" if result.status != "failed"
+                                            else "degraded")
         self._nav_state.update(
             mode="idle",
             status=result.status,
             reason=result.reason,
             ticks=result.ticks,
             command_steps=result.command_steps,
-            last_waypoint=(
-                list(result.last_waypoint) if result.last_waypoint is not None else None
-            ),
+            last_waypoint=(list(result.last_waypoint)
+                           if result.last_waypoint is not None else None),
             last_yaw_rad=result.last_yaw_rad,
             last_error=result.error,
         )
@@ -196,26 +222,26 @@ class SonicLightNavDriver(BaseDriver):
 
     def _receive_backend_state(self, state: dict[str, Any]) -> None:
         self._nav_state.update(state)
-        self._nav_state["mode"] = (
-            "navigating" if state.get("status") == "running" else "idle"
-        )
+        self._nav_state["mode"] = ("navigating" if state.get("status")
+                                   == "running" else "idle")
 
     @staticmethod
     def _format_result(result: NavigationResult) -> str:
-        payload = json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True)
+        payload = json.dumps(result.to_dict(),
+                             ensure_ascii=False,
+                             sort_keys=True)
         if result.status == "failed":
             return f"Failed: navigation backend failed. {payload}"
         if result.status == "cancelled":
             return f"Cancelled: navigation action stopped. {payload}"
         if result.status == "budget_exhausted":
+            budget = "runtime budget" if result.reason == "max_runtime_s" else "step budget"
             return (
-                "Navigation action completed its step budget; semantic goal is not "
-                f"automatically verified. {payload}"
-            )
+                f"Navigation action completed its {budget}; semantic goal is not "
+                f"automatically verified. {payload}")
         return (
             "Navigation action completed; semantic goal still requires observation "
-            f"verification. {payload}"
-        )
+            f"verification. {payload}")
 
     def get_runtime_state(self) -> dict[str, Any]:
         yaw = self._nav_state.get("last_yaw_rad")

@@ -18,7 +18,8 @@ Provide a non-empty instruction limited to the current navigation goal:
   "parameters": {
     "instruction": "move next to the table and stop",
     "max_steps": 120,
-    "control_hz": 4.0
+    "control_hz": 4.0,
+    "max_runtime_s": 120.0
   },
   "reasoning": "The current plan focus is reaching the table before any later task."
 }
@@ -38,3 +39,7 @@ The configured first-stage ceiling is 120 ticks per action; use a new verified a
 7. Do not issue the same no-progress navigation call more than twice. Change viewpoint or report the need for an explicit scan/turn recovery primitive.
 
 Do not use the LIBERO object-location path for this first-stage single uncalibrated G1 camera. Do not start shell-based bridge runners: the active EMERGE Controller owns the SONIC planner port and action lifecycle.
+
+`max_runtime_s` defaults to 120 seconds and may not exceed the driver runtime ceiling.
+Runtime/cancellation are checked after inference; an in-flight request may take up to
+`inference_timeout_s` (default 10 seconds) to return before cleanup.

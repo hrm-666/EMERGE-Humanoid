@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
+from typing import Any
 
 try:
     from loguru import logger
@@ -15,19 +17,16 @@ except ImportError:  # pragma: no cover - fallback for lightweight test envs
     logger = logging.getLogger(__name__)
 
 from Emerge.base import Tool
-from Emerge.utils.action_queue import (
-    append_action,
-    empty_action_document,
-    normalize_action_document,
-    parse_action_markdown,
-    pending_action_type,
-    update_action_document,
-    action_timestamp,
-)
+from Emerge.utils.action_queue import action_timestamp
+from Emerge.utils.action_queue import append_action
+from Emerge.utils.action_queue import empty_action_document
+from Emerge.utils.action_queue import normalize_action_document
+from Emerge.utils.action_queue import parse_action_markdown
+from Emerge.utils.action_queue import pending_action_type
+from Emerge.utils.action_queue import update_action_document
 
 if TYPE_CHECKING:
     from Emerge.agent.visual_monitor import VisualInterruptCoordinator
-
 
 _BASE_RESULT_TIMEOUT_S = 60.0
 _VLA_PER_STEP_TIMEOUT_S = 15.0
@@ -47,9 +46,10 @@ class EmbodiedActionTool(Tool):
             "Use explicit geometry-driven motion primitives for coarse approach and clear-space transport. "
             "Choose concrete poses, line segments, arc geometry, and gripper openings from the latest ROBOT_STATE.md or a successful object_location result. "
             "Use vla_execute for the current visually sensitive contact phase; in a multi-step plan its instruction must describe only the current subgoal, not the complete mission. "
+            "Use navigate_vln only when the active EMBODIED.md profile supports navigation; "
+            "give one current navigation subgoal and verify arrival after execution. "
             "Every tool call MUST include a non-empty `parameters` object. "
-            "Do not call this tool with only `action_type` and `reasoning`."
-        )
+            "Do not call this tool with only `action_type` and `reasoning`.")
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -57,18 +57,21 @@ class EmbodiedActionTool(Tool):
             "type": "object",
             "properties": {
                 "action_type": {
-                    "type": "string",
+                    "type":
+                        "string",
                     "description": (
                         "The type of action to execute. Supported actions:\n"
                         "- 'move_to_pose': Move end-effector to target position and orientation\n"
                         "- 'move_linear': Move end-effector linearly (straight line) to target or by delta\n"
                         "- 'set_gripper': Set gripper opening (open/close command or specific width in meters)\n"
                         "- 'follow_arc': Move end-effector along an arc (circular motion)\n"
-                        "- 'vla_execute': Execute the current phase's natural language instruction using the VLA policy"
+                        "- 'vla_execute': Execute the current phase's natural language instruction using the VLA policy\n"
+                        "- 'navigate_vln': Execute bounded LightNav navigation when supported by EMBODIED.md"
                     ),
                 },
                 "parameters": {
-                    "type": "object",
+                    "type":
+                        "object",
                     "description": (
                         "The parameters for the action. "
                         "Vector parameters prefer list form like [x,y,z], but keyed objects like {x,y,z} are accepted. "
@@ -79,14 +82,16 @@ class EmbodiedActionTool(Tool):
                         "- set_gripper: {opening_m: 0.08} or {command: 'open'} or {command: 'close'}\n"
                         "- follow_arc: {center: [x,y,z], axis: [x,y,z], radius_m: 0.1, angle_deg: 90}\n"
                         "- vla_execute: {instruction: 'pick up the red block', step: 40}\n"
+                        "- navigate_vln: {instruction: 'move next to the table and stop', max_steps: 120, control_hz: 4, max_runtime_s: 120}\n"
+                        "For navigate_vln, max_steps counts control ticks and max_runtime_s bounds runtime; "
+                        "neither budget exhaustion nor LightNav stop proves semantic arrival. "
                         "For move_to_pose, ALWAYS provide position_m and either orientation_euler or orientation_quat. "
                         "For move_linear, ALWAYS provide either position_m or delta_m. "
                         "For follow_arc, ALWAYS provide center, axis, radius_m, and one of angle_deg or angle_rad. "
                         "For vla_execute, ALWAYS provide a natural language instruction (or prompt) AND step "
                         "(the number of action steps the VLA runs before returning control to you). "
                         "The action completes when the step budget is used up or the goal is reached earlier, "
-                        "so you can interleave VLA with rule-based actions."
-                    ),
+                        "so you can interleave VLA with rule-based actions."),
                 },
                 "reasoning": {
                     "type": "string",
@@ -126,7 +131,12 @@ class EmbodiedActionTool(Tool):
         dispatch_message, action_id = accepted
         self.active_action_ids.add(action_id)
         if self.on_event:
-            self.on_event("action.updated", {"action_id": action_id, "action_type": action_type, "status": "pending"})
+            self.on_event(
+                "action.updated", {
+                    "action_id": action_id,
+                    "action_type": action_type,
+                    "status": "pending"
+                })
         return await self._wait_for_action_result(
             action_file,
             action_id=action_id,
@@ -137,6 +147,14 @@ class EmbodiedActionTool(Tool):
     @staticmethod
     def _result_timeout(action_type: str, parameters: dict[str, Any]) -> float:
         """Backstop wait budget, scaled by the action's step count."""
+        if action_type == "navigate_vln":
+            try:
+                runtime = float(parameters.get("max_runtime_s", 120.0))
+                if not math.isfinite(runtime) or runtime <= 0:
+                    runtime = 120.0
+            except (TypeError, ValueError, OverflowError):
+                runtime = 120.0
+            return _BASE_RESULT_TIMEOUT_S + runtime
         if action_type == "vla_execute":
             try:
                 step = max(0, int(parameters.get("step", 0)))
@@ -146,13 +164,20 @@ class EmbodiedActionTool(Tool):
         return _BASE_RESULT_TIMEOUT_S
 
     @staticmethod
-    def _accept_action(action_type: str, parameters: dict[str, Any], action_file: Path) -> str | tuple[str, str]:
+    def _accept_action(action_type: str, parameters: dict[str, Any],
+                       action_file: Path) -> str | tuple[str, str]:
         """Write validated action to ACTION.md."""
+
         def append(document):
             existing = pending_action_type(document)
             if existing:
-                raise ValueError(f"Action '{existing}' is still pending/running; wait before dispatching")
-            return append_action(document, action_type=action_type, parameters=parameters)
+                raise ValueError(
+                    f"Action '{existing}' is still pending/running; wait before dispatching"
+                )
+            return append_action(document,
+                                 action_type=action_type,
+                                 parameters=parameters)
+
         try:
             document = update_action_document(action_file, append)
         except ValueError as exc:
@@ -176,12 +201,12 @@ class EmbodiedActionTool(Tool):
                 dispatch_message=dispatch_message,
                 timeout_s=timeout_s,
                 poll_interval_s=poll_interval_s,
-            )
-        )
+            ))
         if self.visual_interrupts is None:
             return await result_task
 
-        interrupt_task = asyncio.create_task(self.visual_interrupts.wait_for(action_id))
+        interrupt_task = asyncio.create_task(
+            self.visual_interrupts.wait_for(action_id))
         try:
             done, _ = await asyncio.wait(
                 (result_task, interrupt_task),
@@ -201,13 +226,14 @@ class EmbodiedActionTool(Tool):
             return (
                 f"{result} The visual monitor already verified the current subgoal "
                 "as achieved. Do not call task_verification again; update PLAN.md "
-                f"and continue. Visual monitor evidence: {evidence}"
-            )
+                f"and continue. Visual monitor evidence: {evidence}")
         finally:
             for task in (result_task, interrupt_task):
                 if not task.done():
                     task.cancel()
-            await asyncio.gather(result_task, interrupt_task, return_exceptions=True)
+            await asyncio.gather(result_task,
+                                 interrupt_task,
+                                 return_exceptions=True)
 
     async def _poll_action_result(
         self,
@@ -230,7 +256,10 @@ class EmbodiedActionTool(Tool):
                     continue
                 status = str(action.get("status") or "pending").strip().lower()
                 if self.on_event and status != last_status:
-                    self.on_event("action.updated", {"action_id": action_id, **action})
+                    self.on_event("action.updated", {
+                        "action_id": action_id,
+                        **action
+                    })
                 last_status = status
                 if status in {"pending", "running"}:
                     break
@@ -243,8 +272,7 @@ class EmbodiedActionTool(Tool):
         return (
             f"Error: {dispatch_message} Still pending after {timeout_s:.0f}s; the action "
             "remains queued in ACTION.md and the watchdog may be stalled. Do not "
-            "re-dispatch or sleep; inspect the watchdog process."
-        )
+            "re-dispatch or sleep; inspect the watchdog process.")
 
     @staticmethod
     def _request_action_cancel(
@@ -253,12 +281,15 @@ class EmbodiedActionTool(Tool):
         *,
         reason: str,
     ) -> None:
+
         def mark(document):
             for action in document.get("actions", []):
-                if str(action.get("id")) == action_id and action.get("status") in {"pending", "running"}:
+                if str(action.get("id")) == action_id and action.get(
+                        "status") in {"pending", "running"}:
                     action["cancel_requested"] = True
                     action["cancel_reason"] = reason
                     action["cancel_requested_at"] = action_timestamp()
+
         update_action_document(action_file, mark)
 
     async def cancel_active(self, reason: str, timeout: float) -> dict:
@@ -267,20 +298,42 @@ class EmbodiedActionTool(Tool):
             return {"acknowledged": True, "action_ids": []}
         action_file = self.workspace / "ACTION.md"
         document = self._load_action_document(action_file)
-        states = {str(a["id"]): a.get("status") for a in (document or {}).get("actions", [])}
-        unfinished = [i for i in ids if states.get(i) not in {"completed", "failed", "cancelled"}]
+        states = {
+            str(a["id"]): a.get("status")
+            for a in (document or {}).get("actions", [])
+        }
+        unfinished = [
+            i for i in ids
+            if states.get(i) not in {"completed", "failed", "cancelled"}
+        ]
         if not unfinished:
-            return {"acknowledged": True, "action_ids": ids, "requested_action_ids": [], "states": states}
+            return {
+                "acknowledged": True,
+                "action_ids": ids,
+                "requested_action_ids": [],
+                "states": states
+            }
         for action_id in unfinished:
             self._request_action_cancel(action_file, action_id, reason=reason)
         deadline = time.monotonic() + timeout
         while True:
             document = self._load_action_document(action_file)
-            states = {str(a["id"]): a.get("status") for a in (document or {}).get("actions", [])}
-            confirmed = all(states.get(i) in {"completed", "failed", "cancelled"} for i in ids)
+            states = {
+                str(a["id"]): a.get("status")
+                for a in (document or {}).get("actions", [])
+            }
+            confirmed = all(
+                states.get(i) in {"completed", "failed", "cancelled"}
+                for i in ids)
             if confirmed or time.monotonic() >= deadline:
-                return {"acknowledged": confirmed, "action_ids": ids, "requested_action_ids": unfinished,
-                        "states": {i: states.get(i, "unknown") for i in ids}}
+                return {
+                    "acknowledged": confirmed,
+                    "action_ids": ids,
+                    "requested_action_ids": unfinished,
+                    "states": {
+                        i: states.get(i, "unknown") for i in ids
+                    }
+                }
             await asyncio.sleep(0.1)
 
     @staticmethod
