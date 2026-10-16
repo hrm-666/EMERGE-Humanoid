@@ -1,0 +1,13 @@
+{
+  "control_root": "/home/embodied/visionpro_sonic_bridge",
+  "runtime": "dry-run",
+  "lightnav_server": "ws://127.0.0.1:8051",
+  "camera_endpoint": "tcp://127.0.0.1:5560",
+  "camera_name": "ego_view",
+  "camera_transport": "official01_rgb",
+  "sonic_feedback_endpoint": "tcp://127.0.0.1:5557",
+  "sonic_feedback_topic": "g1_debug",
+  "max_micro_duration_s": 2.0,
+  "max_inference_duration_s": 60.0,
+  "publish_observations": false
+}

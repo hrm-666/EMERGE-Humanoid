@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
 _BASE_RESULT_TIMEOUT_S = 60.0
 _VLA_PER_STEP_TIMEOUT_S = 15.0
+_G1_ACTION_GRACE_S = 30.0
 
 
 class EmbodiedActionTool(Tool):
@@ -46,7 +47,8 @@ class EmbodiedActionTool(Tool):
             "Use explicit geometry-driven motion primitives for coarse approach and clear-space transport. "
             "Choose concrete poses, line segments, arc geometry, and gripper openings from the latest ROBOT_STATE.md or a successful object_location result. "
             "Use vla_execute for the current visually sensitive contact phase; in a multi-step plan its instruction must describe only the current subgoal, not the complete mission. "
-            "Use navigate_vln only when the active EMBODIED.md profile supports navigation; "
+            "Use navigate or navigate_vln only when the active EMBODIED.md profile supports navigation; "
+            "use infer_gr00t, run_fixed_action, and move_micro only when the active G1 profile lists them. "
             "give one current navigation subgoal and verify arrival after execution. "
             "Every tool call MUST include a non-empty `parameters` object. "
             "Do not call this tool with only `action_type` and `reasoning`.")
@@ -66,7 +68,11 @@ class EmbodiedActionTool(Tool):
                         "- 'set_gripper': Set gripper opening (open/close command or specific width in meters)\n"
                         "- 'follow_arc': Move end-effector along an arc (circular motion)\n"
                         "- 'vla_execute': Execute the current phase's natural language instruction using the VLA policy\n"
-                        "- 'navigate_vln': Execute bounded LightNav navigation when supported by EMBODIED.md"
+                        "- 'navigate': Execute bounded LightNav navigation through the active G1 executive\n"
+                        "- 'navigate_vln': Backward-compatible LightNav navigation action\n"
+                        "- 'infer_gr00t': Run one bounded GR00T instruction, then return to READY\n"
+                        "- 'run_fixed_action': Run an allow-listed pose, trajectory, or preparation\n"
+                        "- 'move_micro': Run one bounded body-relative translation or turn"
                     ),
                 },
                 "parameters": {
@@ -82,8 +88,11 @@ class EmbodiedActionTool(Tool):
                         "- set_gripper: {opening_m: 0.08} or {command: 'open'} or {command: 'close'}\n"
                         "- follow_arc: {center: [x,y,z], axis: [x,y,z], radius_m: 0.1, angle_deg: 90}\n"
                         "- vla_execute: {instruction: 'pick up the red block', step: 40}\n"
-                        "- navigate_vln: {instruction: 'move next to the table and stop', max_steps: 120, control_hz: 4, max_runtime_s: 120}\n"
-                        "For navigate_vln, max_steps counts control ticks and max_runtime_s bounds runtime; "
+                        "- navigate: {instruction: 'move next to the table and stop', max_steps: 120, control_hz: 4, max_runtime_s: 120}\n"
+                        "- infer_gr00t: {instruction: 'pick up the apple', duration_s: 10, timeout_s: 30}\n"
+                        "- run_fixed_action: {kind: 'pose', name: 'pick_ready_r', timeout_s: 30}\n"
+                        "- move_micro: {direction: 'forward', duration_s: 0.5, timeout_s: 15}\n"
+                        "For navigate/navigate_vln, max_steps counts control ticks and max_runtime_s bounds runtime; "
                         "neither budget exhaustion nor LightNav stop proves semantic arrival. "
                         "For move_to_pose, ALWAYS provide position_m and either orientation_euler or orientation_quat. "
                         "For move_linear, ALWAYS provide either position_m or delta_m. "
@@ -147,7 +156,7 @@ class EmbodiedActionTool(Tool):
     @staticmethod
     def _result_timeout(action_type: str, parameters: dict[str, Any]) -> float:
         """Backstop wait budget, scaled by the action's step count."""
-        if action_type == "navigate_vln":
+        if action_type in {"navigate", "navigate_vln"}:
             try:
                 runtime = float(parameters.get("max_runtime_s", 120.0))
                 if not math.isfinite(runtime) or runtime <= 0:
@@ -155,6 +164,14 @@ class EmbodiedActionTool(Tool):
             except (TypeError, ValueError, OverflowError):
                 runtime = 120.0
             return _BASE_RESULT_TIMEOUT_S + runtime
+        if action_type in {"infer_gr00t", "run_fixed_action", "move_micro"}:
+            try:
+                timeout = float(parameters.get("timeout_s", 30.0))
+                if not math.isfinite(timeout) or timeout <= 0:
+                    timeout = 30.0
+            except (TypeError, ValueError, OverflowError):
+                timeout = 30.0
+            return _G1_ACTION_GRACE_S + timeout
         if action_type == "vla_execute":
             try:
                 step = max(0, int(parameters.get("step", 0)))
