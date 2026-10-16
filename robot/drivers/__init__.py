@@ -10,6 +10,7 @@ from robot.plugins import activate_external_driver, list_external_drivers, resol
 # Format:  "short_name": "module_path.ClassName"
 
 DRIVER_REGISTRY: dict[str, str] = {
+    "lightnav_sonic_g1": "robot.drivers.lightnav_sonic_driver.SonicLightNavDriver",
     "libero_mujoco": "robot.drivers.mujoco_driver.LiberoMujocoDriver",
 }
 

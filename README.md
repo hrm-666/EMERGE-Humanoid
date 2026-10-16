@@ -41,23 +41,21 @@ Controller, while live visual observations and simulator success signals close
 the loop, allowing the robot to perceive, decide, act, and correct itself through
 continuous interaction.*
 
-## Humanoid Navigation Integration (`humanoid-dev`)
+## Humanoid Navigation Skill (humanoid-dev)
 
-This fork adds a research integration that exposes LightNav-0 visual-language
-navigation as an EMERGE skill and executes its local waypoints through NVIDIA
-SONIC whole-body control on a Unitree G1. The integration keeps both upstream
-policy repositories unchanged and includes a deterministic, real-model
-ProcTHOR test path.
+LightNav-0 and SONIC provide the navigation capability exposed through the
+built-in lightnav-sonic-navigation Skill. Third-party sources are pinned under
+third_party; the Driver and client follow the existing robot package layout.
 
-- [仿真代码整理、论文接口核对与分支约定](apply_docs/06_仿真代码整理与分支约定.md)
-- [当前苹果桌与 ProcTHOR 仿真入口](integrations/lightnav_sonic_emerge/SIMULATION.md)
-- [Integration overview and reproducible quick start](integrations/lightnav_sonic_emerge/README.md)
-- [中文执行与测试终端指令](apply_docs/04_导航Skill执行与测试终端指令.md)
-- [中文实现文件与改动说明](apply_docs/05_导航Skill实现文件与改动说明.md)
+- [Architecture, dependencies, and validation](scripts/LightNav_eval/README.md)
+- [Apple-table simulation and Agent task instructions](scripts/LightNav_eval/SIMULATION.md)
+- [Historical experiment notes](docs/lightnav/notes/README.md)
 
-The LightNav-0 → SONIC simulation path has been exercised end to end. Main-Agent
-planning and real-robot deployment remain experimental and are not claimed as
-validated in this branch.
+The recorded Astra run exercised planning, two real GPU navigation actions,
+visual verification, and recovery; both verifications were uncertain. Arrival
+was not established. The current Skill allows up to five attempts with
+verification after each. This migration is verified offline; hardware deployment
+and a new five-attempt real-model run have not been performed.
 
 ## Installation
 

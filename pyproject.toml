@@ -116,7 +116,8 @@ include = [
 include = [
     "Emerge/",
     "robot/",
-    "bridge/",
+    "scripts/LightNav_eval/",
+    "dev/lightnav_sonic_*.json",
     "README.md",
     "LICENSE",
 ]
