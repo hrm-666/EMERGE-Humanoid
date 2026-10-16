@@ -12,11 +12,13 @@ from robot.drivers.base_driver import BaseDriver
 from robot.drivers.base_driver import CancelCheck
 
 try:
+    from . import camera
     from .navigation_backend import NavigationBackend
     from .navigation_backend import NavigationConfig
     from .navigation_backend import NavigationResult
     from .observation_writer import EgoObservationWriter
 except ImportError:  # External-plugin loading adds this directory to sys.path.
+    import camera
     from navigation_backend import NavigationBackend
     from navigation_backend import NavigationConfig
     from navigation_backend import NavigationResult
@@ -36,6 +38,7 @@ class SonicLightNavDriver(BaseDriver):
         lightnav_server: str = "ws://127.0.0.1:8051",
         camera_endpoint: str = "tcp://127.0.0.1:5555",
         camera_name: str = "ego_view",
+        camera_transport: str = "sonic_jpeg",
         sonic_feedback_endpoint: str = "tcp://127.0.0.1:5557",
         sonic_feedback_topic: str = "g1_debug",
         sonic_bind: str = "tcp://*:5556",
@@ -56,6 +59,12 @@ class SonicLightNavDriver(BaseDriver):
         del gui  # The separately launched SONIC MuJoCo process owns its GUI.
         del lightnav_bridge_root  # Deprecated: the bridge now ships with this plugin.
         self.workspace = Path(workspace).expanduser().resolve()
+        if camera_transport not in ("sonic_jpeg", "official01_rgb"):
+            raise ValueError("unsupported camera_transport")
+        if camera_transport == "official01_rgb" and camera_name != "ego_view":
+            raise ValueError("official01_rgb only publishes ego_view")
+        self._camera: camera.CameraSubscriber | None = None
+        self._observation_state: dict[str, Any] = {"status": "unavailable"}
 
         own_dir = Path(__file__).resolve().parent
         configured_profile = Path(profile_path).expanduser(
@@ -70,6 +79,8 @@ class SonicLightNavDriver(BaseDriver):
                 camera_endpoint,
             "camera_name":
                 camera_name,
+            "camera_transport":
+                camera_transport,
             "sonic_feedback_endpoint":
                 sonic_feedback_endpoint,
             "sonic_feedback_topic":
@@ -101,6 +112,7 @@ class SonicLightNavDriver(BaseDriver):
             self.workspace,
             view_name=camera_name,
             enabled=publish_observations,
+            max_age_s=self._base_config["input_timeout_s"],
         )
         self._nav_state: dict[str, Any] = {
             "mode": "idle",
@@ -143,6 +155,7 @@ class SonicLightNavDriver(BaseDriver):
     def load_scene(self, scene: dict[str, dict]) -> None:
         del scene
         self._connection_state["status"] = "ready"
+        self._refresh_observation()
 
     def execute_action(
         self,
@@ -243,11 +256,48 @@ class SonicLightNavDriver(BaseDriver):
             "Navigation action completed; semantic goal still requires observation "
             f"verification. {payload}")
 
+    def _make_camera(self) -> camera.CameraSubscriber:
+        return camera.create_camera(
+            self._base_config["camera_endpoint"],
+            self._base_config["camera_name"],
+            self._base_config["camera_transport"],
+        )
+
+    def _refresh_observation(self) -> None:
+        """Publish passive evidence on the Controller thread, including idle polls."""
+        if not self._observation_writer.enabled:
+            self._observation_state = {"status": "disabled"}
+            return
+        if self._connection_state["status"] == "closed":
+            return
+        try:
+            if self._camera is None:
+                self._camera = self._make_camera()
+            jpeg = self._camera.latest(self._base_config["input_timeout_s"])
+            if jpeg is None:
+                self._observation_writer.invalidate()
+                self._observation_state = {"status": "unavailable"}
+                return
+            self._observation_writer.write_jpeg(jpeg)
+            self._observation_state = {
+                "status": "available",
+                "revision": self._observation_writer.revision,
+            }
+        except Exception as exc:
+            # Camera failures must not prevent Controller cancellation/results.
+            self._observation_writer.invalidate()
+            self._observation_state = {
+                "status": "unavailable",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
     def get_runtime_state(self) -> dict[str, Any]:
+        self._refresh_observation()
         yaw = self._nav_state.get("last_yaw_rad")
         robot: dict[str, Any] = {
             "connection_state": deepcopy(self._connection_state),
             "nav_state": deepcopy(self._nav_state),
+            "observation_state": deepcopy(self._observation_state),
         }
         if isinstance(yaw, (int, float)) and math.isfinite(float(yaw)):
             robot["robot_pose"] = {
@@ -259,3 +309,10 @@ class SonicLightNavDriver(BaseDriver):
     def close(self) -> None:
         self._nav_state.update(mode="idle", status="closed")
         self._connection_state["status"] = "closed"
+        self._observation_state = {"status": "unavailable"}
+        try:
+            if self._camera is not None:
+                self._camera.close()
+        finally:
+            self._camera = None
+            self._observation_writer.invalidate()

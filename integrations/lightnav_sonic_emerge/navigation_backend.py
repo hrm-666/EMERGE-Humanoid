@@ -11,8 +11,10 @@ from typing import Any
 from typing import Callable
 
 try:
+    from . import camera
     from .observation_writer import EgoObservationWriter
 except ImportError:  # External-plugin loading adds this directory to sys.path.
+    import camera
     from observation_writer import EgoObservationWriter
 
 CancelCheck = Callable[[], str | None]
@@ -24,6 +26,7 @@ class NavigationConfig:
     lightnav_server: str
     camera_endpoint: str = "tcp://127.0.0.1:5555"
     camera_name: str = "ego_view"
+    camera_transport: str = "sonic_jpeg"
     sonic_feedback_endpoint: str = "tcp://127.0.0.1:5557"
     sonic_feedback_topic: str = "g1_debug"
     sonic_bind: str = "tcp://*:5556"
@@ -36,6 +39,10 @@ class NavigationConfig:
     elastic_band_release_file: Path | None = None
 
     def __post_init__(self) -> None:
+        if self.camera_transport not in ("sonic_jpeg", "official01_rgb"):
+            raise ValueError("unsupported camera_transport")
+        if self.camera_transport == "official01_rgb" and self.camera_name != "ego_view":
+            raise ValueError("official01_rgb only publishes ego_view")
         release_file = self.elastic_band_release_file
         if release_file is not None and not isinstance(release_file, Path):
             object.__setattr__(
@@ -119,7 +126,6 @@ class NavigationBackend:
             from .bridge.adapter import AdapterLimits
             from .bridge.adapter import LightNav2SonicAdapter
             from .bridge.lightnav_ws import LightNavWsClient
-            from .bridge.runner import SonicCameraSubscriber
             from .bridge.runner import SonicYawSubscriber
             from .bridge.sonic_zmq import SonicZmqPublisher
         except ImportError:
@@ -127,7 +133,6 @@ class NavigationBackend:
                 from bridge.adapter import AdapterLimits
                 from bridge.adapter import LightNav2SonicAdapter
                 from bridge.lightnav_ws import LightNavWsClient
-                from bridge.runner import SonicCameraSubscriber
                 from bridge.runner import SonicYawSubscriber
                 from bridge.sonic_zmq import SonicZmqPublisher
             except ImportError as fallback_exc:
@@ -136,7 +141,8 @@ class NavigationBackend:
                     "external plugin directory") from fallback_exc
 
         return (
-            SonicCameraSubscriber,
+            lambda endpoint, name: camera.create_camera(
+                endpoint, name, self.config.camera_transport),
             SonicYawSubscriber,
             SonicZmqPublisher,
             lambda endpoint, client_id: LightNavWsClient(
@@ -240,6 +246,8 @@ class NavigationBackend:
                 jpeg = camera.latest(self.config.input_timeout_s)
                 yaw = yaw_source.latest(self.config.input_timeout_s)
                 if jpeg is None or yaw is None:
+                    if jpeg is None:
+                        self.observation_writer.invalidate()
                     stale_ticks += 1
                     missing = "camera" if jpeg is None else "robot yaw feedback"
                     self._send_idle(publisher, adapter, yaw,

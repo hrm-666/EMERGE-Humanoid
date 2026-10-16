@@ -220,6 +220,9 @@ class VisualMonitor:
             return
 
         observation = json.loads(observation_file.read_text(encoding="utf-8"))
+        expires_at = observation.get("expires_at")
+        if expires_at is not None and not time.time() < float(expires_at):
+            return
         observation_revision = int(
             observation.get("revision", observation_file.stat().st_mtime_ns)
         )

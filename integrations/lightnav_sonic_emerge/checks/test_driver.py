@@ -29,6 +29,7 @@ class _Backend:
 class _TestDriver(driver.SonicLightNavDriver):
 
     def __init__(self, result, **kwargs):
+        kwargs.setdefault("publish_observations", False)
         self._test_result = result
         super().__init__(**kwargs)
 

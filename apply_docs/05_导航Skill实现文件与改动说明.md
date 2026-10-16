@@ -1,5 +1,9 @@
 # LightNav-0 + SONIC 导航 Skill：实现文件与改动说明
 
+> 2026-10-16 更新：本文保留初版设计记录。原 `workspace_skill/SKILL.md` 已迁入
+> `Emerge/skills/lightnav-sonic-navigation/SKILL.md`；无需手工安装副本。
+> 当前原生接口、验证链路和配置以 [07 接入说明](07_原生OperationalSkill接入与验证.md) 为准。
+
 ## 1. 改动范围
 
 本次只在 `/home/embodied/EMERGE-Humanoid` fork 内新增独立 integration、测试和文档。为了让其他开发者仅克隆本分支即可获得完整接入代码，原型 bridge 已作为本 integration 的自包含模块提交。

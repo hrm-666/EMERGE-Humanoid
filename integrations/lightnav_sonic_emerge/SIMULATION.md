@@ -5,7 +5,7 @@
 
 ## 验证
 
-EMERGE 接入检查（50 项，无 GPU/MuJoCo）：
+EMERGE 接入检查（61 项，无 GPU/MuJoCo）：
 
 ```bash
 cd ~/EMERGE-Humanoid
@@ -29,7 +29,7 @@ WebSocket/ZMQ 检查绑定临时 loopback 端口。无需模型 checkpoint 或 S
 
 沿用 [README 的 ProcTHOR 六终端流程](README.md#end-to-end-procthor-run)。
 `driver_procthor.json` 对应 5555 JPEG 和 5557 yaw；执行由 Controller 独占 5556。
-Agent 模式额外需要已有 provider 配置和 workspace navigation skill。
+Agent 模式需要已有 provider 配置；导航 Skill 已随仓库内置，无需复制到 workspace。
 此次新增动作等待/取消测试不等于真实 LLM 端到端验收。
 
 ## 苹果桌：统一启动器
@@ -104,7 +104,27 @@ nav Go straight to the table directly ahead with the apple on top and stop.
 启动器的仿真/SONIC/模型日志在 `EMERGE-Humanoid/outputs/`，控制器的 task 目录
 由其 `--output-dir` 决定；这些运行产物已被 Git 忽略。
 苹果桌读取 5560 Official01 RGB，ProcTHOR 读取 5555 JPEG，二者不是可互换配置。
-苹果桌目前仍是独立控制入口，未接到 EMERGE `navigate_vln` 的相机适配层。
+苹果桌也已提供 EMERGE `navigate_vln` 相机适配：使用 `driver_tabletop.json`。
+下面是原生 Skill 路径（替换上文终端 3 的独立 control 进程）：
+
+```bash
+cd ~/EMERGE-Humanoid
+PYTHONPATH=. ~/miniconda3/envs/EmergePolicy/bin/python -m robot.controller \
+  --driver lightnav_sonic_g1 \
+  --workspace "$HOME/.Emerge/workspace" \
+  --driver-config integrations/lightnav_sonic_emerge/driver_tabletop.json \
+  --interval 0.25
+```
+
+仿真、SONIC、模型和 ego 查看器继续使用上面的独立进程。确认仿真支撑已按原流程
+手动释放、机器人站稳且 RGB/yaw 有效后，再从 Main Agent 或 enqueue 工具提交动作。
+该配置不会写 ProcTHOR 的支撑释放文件。Main Agent 读取内置导航 Skill，先用
+`update_plan` 确立当前目标，再调用 `navigate_vln`，由 `task_verification` 验证。
+
+不能同时运行 `local_tabletop control` 和 Controller，二者争用同一 planner 端口。
+新的适配复用 RGB/waypoint/SONIC 通道；独立 tabletop control 的 motion gate、键盘、
+复位和录像评估流程没有被迁入 Controller。苹果桌原生路径本轮只做协议与离线接口
+验证，尚未用真实模型和 SONIC 重新运行，不应宣称与独立控制器的运行效果等价。
 
 历史仿真结果和旧命令见 `~/LightNav-0/docs/LIGHTNAV_SONIC_TABLETOP.md`。
 本次仅整理源码和做自动回归，没有重新启动桌面仿真、GPU 模型或 SONIC deployment。

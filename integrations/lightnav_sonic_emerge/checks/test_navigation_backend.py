@@ -76,6 +76,10 @@ class _Writer:
 
     def __init__(self):
         self.images = []
+        self.invalidated = False
+
+    def invalidate(self):
+        self.invalidated = True
 
     def write_jpeg(self, jpeg):
         self.images.append(jpeg)

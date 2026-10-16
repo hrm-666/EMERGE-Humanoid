@@ -31,6 +31,25 @@ See [the simulation guide](SIMULATION.md) for the current entry points and
 [the Chinese handover](../../apply_docs/06_仿真代码整理与分支约定.md) for the
 paper/code mapping, source inventory, API-version differences, and branch scope.
 
+## Native Operational Skill
+
+The canonical Skill is
+[`Emerge/skills/lightnav-sonic-navigation/SKILL.md`](../../Emerge/skills/lightnav-sonic-navigation/SKILL.md).
+The stock `SkillsLoader` advertises its description and path; the Main Agent
+reads the complete contract on selection. No workspace copy or new registry is
+needed. The native path is:
+
+```text
+SkillsLoader -> read_file(SKILL.md) -> update_plan
+  -> execute_robot_action(navigate_vln) -> ACTION.md -> Controller/Driver
+  -> fresh ego RGB -> delegate_subagent(task_verification)
+  -> achieved / not_achieved / uncertain -> update_plan(progress or recovery)
+```
+
+See [the source-to-contract audit](../../apply_docs/07_原生OperationalSkill接入与验证.md)
+for the pinned official sources, paper mapping, compatibility choices, and
+what the offline tests do and do not establish.
+
 ## System architecture
 
 ```text
@@ -94,7 +113,8 @@ integrations/lightnav_sonic_emerge/
 ├── enqueue_navigation.py       # deterministic ACTION.md producer
 ├── driver_procthor.json        # portable local endpoint defaults
 ├── profile_lightnav_sonic_g1.md
-├── workspace_skill/SKILL.md    # Main-Agent navigation guidance
+├── camera.py                   # shared simulation RGB transport adapters
+├── driver_tabletop.json         # apple-table Official01 RGB defaults
 ├── bridge/                     # adapter, protocols and room simulator
 └── checks/                     # offline unit/protocol tests
 ```
@@ -177,10 +197,12 @@ python -c "from robot.plugins import register_plugin; \
 s=register_plugin('${EMERGE_ROOT}/integrations/lightnav_sonic_emerge'); \
 print(s.driver_name, s.dotted_path)"
 
-mkdir -p "$HOME/.Emerge/workspace/skills/lightnav-sonic-navigation"
-cp "$EMERGE_ROOT/integrations/lightnav_sonic_emerge/workspace_skill/SKILL.md" \
-  "$HOME/.Emerge/workspace/skills/lightnav-sonic-navigation/SKILL.md"
 ```
+
+The navigation Skill ships with EMERGE-Humanoid. If an older installation has
+`~/.Emerge/workspace/skills/lightnav-sonic-navigation/SKILL.md`, it overrides the
+built-in version. Back up that file and remove the override only if it is an
+unmodified legacy copy; review custom instructions before migrating them.
 
 Expected registration output includes:
 
@@ -235,9 +257,12 @@ python -m unittest discover \
   -s integrations/lightnav_sonic_emerge/checks -v
 ```
 
-Expected result: **50 tests pass**. Apple-table tests use a separate MuJoCo
+Expected result: **61 tests pass**. Apple-table tests use a separate MuJoCo
 Python environment; see [SIMULATION.md](SIMULATION.md). The core checks include
-an offline Agent-tool → queue → driver → result round trip. They do not run an
+native Skill discovery and example-schema validation, actual Controller dispatch,
+passive/expired observations, and a real verification-subagent tool loop using
+scripted model outputs. Verified success and recovery plan transitions are
+scripted through `update_plan`. They do not run an
 LLM planner or a real checkpoint.
 
 ## End-to-end ProcTHOR run
@@ -360,8 +385,8 @@ python -m json.tool \
 
 ## Main-Agent use
 
-After configuring an EMERGE-supported model provider, the installed workspace
-skill instructs the Main Agent to call `navigate_vln`, inspect the resulting
+After configuring an EMERGE-supported model provider, the built-in navigation
+Skill instructs the Main Agent to call `navigate_vln`, inspect the resulting
 observation, and avoid treating action completion as semantic success. For
 example:
 
@@ -377,6 +402,23 @@ stop; verify arrival using the latest camera observation.”
 This Main-Agent route is structurally connected but **has not yet been evaluated
 in the current prototype**. Use the deterministic enqueue path first when
 debugging the robotics stack.
+
+## Observation lifecycle
+
+The Controller passes its selected workspace to this driver, including when
+`--workspace` differs from the default. A passive camera subscriber publishes
+initial/idle/post-action images without opening a planner publisher. During an
+action the navigation loop publishes the same manifest. Both use the selected
+`camera_transport` (`sonic_jpeg` or `official01_rgb`).
+
+The manifest carries `published_at` and `expires_at`. Native task verification
+rejects expired snapshots and the visual monitor skips them. Missing frames
+withdraw the manifest; the last PNG remains diagnostic only. Legacy manifests
+without expiry retain their existing behavior. The expiry bounds publication
+liveness; SONIC JPEG freshness is based on local receipt, whereas Official01
+also checks the source timestamp. It is not a synchronized capture-time or
+physical-stop guarantee. Use an idle polling interval below `input_timeout_s`
+(the documented 0.25 s interval is below the default 0.75 s).
 
 ## Action and transport contract
 
@@ -440,15 +482,18 @@ process-level shutdown command.
   target starts behind the robot.
 - The first version consumes only the first predicted waypoint and does not send
   a full trajectory to SONIC.
-- Completion is not paired with an independent semantic-goal verifier.
+- Native `task_verification` is connected, but its real-model navigation
+  judgments and Main-Agent recovery quality have not been evaluated.
 - ProcTHOR composition currently targets the tested LightNav demo asset and
   SONIC 43-DoF G1 scene.
-- Main-Agent recovery planning and a UniNav checkpoint are future work.
+- Real-model Main-Agent recovery evaluation and a UniNav checkpoint remain
+  future work.
 
 ## Development rules
 
 - Keep official LightNav-0 and SONIC sources unchanged.
-- Put integration changes and tests in this directory.
+- Put backend code and tests in this directory; maintain the canonical Skill
+  under `Emerge/skills/`. Keep native framework changes minimal.
 - Do not commit checkpoints, engines, generated MJCF, observations, API keys, or
   local workspace state.
 - Run the core checks and the separate apple-table simulation checks before opening a pull request.

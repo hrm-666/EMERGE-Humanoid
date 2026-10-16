@@ -93,6 +93,9 @@ def _driver_kwargs_for_workspace(
     resolved = dict(driver_kwargs or {})
     if driver_name == "libero_mujoco":
         resolved.setdefault("workspace", str(workspace))
+    if driver_name == "lightnav_sonic_g1":
+        # Queue, state, and camera evidence must share the selected workspace.
+        resolved["workspace"] = str(workspace)
     return resolved
 
 

@@ -14,5 +14,6 @@
   "elastic_band_release_file": "/tmp/lightnav_sonic_release",
   "publish_observations": true,
   "inference_timeout_s": 10.0,
-  "max_action_runtime_s": 120.0
+  "max_action_runtime_s": 120.0,
+  "camera_transport": "sonic_jpeg"
 }
