@@ -9,7 +9,9 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from Emerge.runtime.protocol import RunEvent, RunRequest, RunResult
+from Emerge.runtime.protocol import RunEvent
+from Emerge.runtime.protocol import RunRequest
+from Emerge.runtime.protocol import RunResult
 
 _SECRET_KEYS = re.compile(r"api.?key|authorization|password|secret|access.?token|refresh.?token", re.I)
 
@@ -55,16 +57,48 @@ class RunArtifacts:
         directory.mkdir(parents=True, exist_ok=False)
         atomic_json(directory / "request.json", redact(request.model_dump(mode="json")))
         self.stream = (directory / "events.jsonl").open("x", encoding="utf-8")
+        self.terminal = (directory / "terminal_output.txt").open("x", encoding="utf-8")
+        self._streamed_messages: set[str] = set()
+
+    def _terminal_event(self, event: RunEvent) -> None:
+        data = event.data
+        if event.type == "run.started":
+            self.terminal.write(f"[YOU]\n{data.get('message', '')}\n")
+        elif event.type == "assistant.delta":
+            message_id = str(data.get("message_id", ""))
+            if message_id not in self._streamed_messages:
+                self._streamed_messages.add(message_id)
+                self.terminal.write("\n[EMERGE]\n")
+            self.terminal.write(str(data.get("text", "")))
+        elif event.type == "assistant.message":
+            message_id = str(data.get("message_id", ""))
+            if message_id not in self._streamed_messages:
+                self.terminal.write(f"\n[EMERGE]\n{data.get('text', '')}")
+            self.terminal.write("\n")
+        elif event.type.startswith("tool."):
+            status = event.type.split(".", 1)[1]
+            tool = data.get("tool", "unknown")
+            duration = data.get("duration_ms")
+            suffix = f" · {duration}ms" if duration is not None else ""
+            self.terminal.write(f"\n[TOOL] {tool} · {status}{suffix}\n")
+        elif event.type == "run.finished":
+            self.terminal.write(
+                f"\n[RUN] {data.get('run_status', 'unknown')} · "
+                f"{data.get('finish_reason', 'unknown')}\n"
+            )
+        self.terminal.flush()
 
     def event(self, event: RunEvent) -> None:
         self.stream.write(json.dumps(redact(event.model_dump(mode="json")), ensure_ascii=False) + "\n")
         self.stream.flush()
+        self._terminal_event(event)
 
     def finish(self, result: RunResult) -> None:
         atomic_json(self.directory / "result.json", redact(result.model_dump(mode="json")))
 
     def close(self) -> None:
         self.stream.close()
+        self.terminal.close()
 
 
 class WorkspaceLease:

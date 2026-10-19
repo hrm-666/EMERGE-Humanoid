@@ -41,9 +41,48 @@ Controller, while live visual observations and simulator success signals close
 the loop, allowing the robot to perceive, decide, act, and correct itself through
 continuous interaction.*
 
+## G1 Navigation and Manipulation (humanoid-integration)
+
+This branch reuses the navigation implementation from `humanoid-nav` and combines
+it with the Official01 G1 Executive and GR00T integration. The Agent reads two
+Operational Skills and uses one native Controller/Driver for the whole task:
+
+- [Navigation](Emerge/skills/lightnav-sonic-navigation/SKILL.md): LightNav approach
+  and bounded standing-position/heading corrections.
+- [Manipulation](Emerge/skills/gr00t-manipulation/SKILL.md): readiness checks,
+  configured preparation, GR00T inference and grasp verification.
+
+In the EMERGE terminal UI, enter either:
+
+> 寻找放有苹果的桌子，走到桌子面前抓起苹果。
+
+> Find the table with an apple, walk up to it, and pick up the apple.
+
+Skill selection, phase planning, recovery budgets and verification belong to the
+framework; the user need not supply a control script in the task prompt.
+
+| Component | Location |
+| --- | --- |
+| Unified native Driver | [official01_g1_driver.py](robot/drivers/official01_g1_driver.py) |
+| Single Executive transport | [official01_executive.py](robot/drivers/official01_executive.py) |
+| Reused navigation + Executive adapter | [robot/navigation/lightnav_sonic](robot/navigation/lightnav_sonic/) |
+| Embodiment and action contract | [official01_g1.md](robot/profiles/official01_g1.md) |
+| Simulation configuration | [official01_g1_sim.json](dev/official01_g1_sim.json) |
+| No-sudo startup and acceptance | [scripts/G1_eval/README.md](scripts/G1_eval/README.md) |
+
+The Executive keeps one motion owner and maintains arm/hand hold while the Agent
+thinks. It manages execution modes, not a hardcoded apple-task plan. Navigation
+completion is not grasp readiness; GR00T window completion is not grasp success.
+The real UI trial reached GR00T and visual verification, but has not confirmed
+a successful apple grasp. See the [trial records](scripts/G1_eval/README.md#full-ui-trial-and-remaining-manipulation-gap)
+for the remaining standing-position and whole-body grasp validation. This branch
+is an integration checkpoint, not a validated end-to-end system. Real-hardware
+work remains separate.
+
 ## Humanoid Navigation Skill (humanoid-nav)
 
-This branch contains the simulation navigation work for Unitree G1.
+The standalone navigation path from `humanoid-nav` remains available.
+Use the unified Driver above for combined navigation and manipulation.
 [lightnav-sonic-navigation](Emerge/skills/lightnav-sonic-navigation/SKILL.md)
 is an Operational Skill: the main Agent plans a navigation phase, calls the
 native execute_robot_action tool with navigate_vln, and verifies the result.

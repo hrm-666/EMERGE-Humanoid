@@ -10,8 +10,14 @@ from typing import Callable
 from loguru import logger
 
 from Emerge.runtime.configuration import load_runtime_config
-from Emerge.runtime.protocol import RunError, RunEvent, RunRequest, RunResult, utc_now
-from Emerge.runtime.storage import RunArtifacts, WorkspaceLease, redact
+from Emerge.runtime.protocol import RunError
+from Emerge.runtime.protocol import RunEvent
+from Emerge.runtime.protocol import RunRequest
+from Emerge.runtime.protocol import RunResult
+from Emerge.runtime.protocol import utc_now
+from Emerge.runtime.storage import RunArtifacts
+from Emerge.runtime.storage import WorkspaceLease
+from Emerge.runtime.storage import redact
 
 
 def build_agent(config):
@@ -51,6 +57,7 @@ class AgentRuntime:
         cancel = cancel or asyncio.Event()
         started_at, started = utc_now(), time.monotonic()
         agent = None
+        recorder = None
         seq = 0
         status, reason, reply, error, cancellation = "failed", "runtime_error", "", None, None
         with ExitStack() as resources, logger.contextualize(run_id=request.run_id):
@@ -79,6 +86,16 @@ class AgentRuntime:
                 config = load_runtime_config(request)
                 workspace = config.workspace_path.resolve()
                 resources.enter_context(WorkspaceLease(workspace))
+                if artifacts and config.run_recording.enabled:
+                    from Emerge.runtime.recording import RunVideoRecorder
+
+                    recorder = RunVideoRecorder(
+                        artifacts.directory,
+                        endpoint=config.run_recording.endpoint,
+                        fps=config.run_recording.fps,
+                        ffmpeg_binary=config.run_recording.ffmpeg_binary,
+                    )
+                    emit("recording.started", recorder.start())
                 if cancel.is_set():
                     status, reason = "cancelled", "cancel_requested"
                 else:
@@ -143,6 +160,16 @@ class AgentRuntime:
                             if reason != "cancellation_unconfirmed":
                                 reason = "cleanup_error"
                                 error = RunError(code=type(exc).__name__, message=str(exc))
+
+                if recorder:
+                    try:
+                        emit("recording.finished", recorder.stop())
+                    except Exception as exc:
+                        logger.exception("Run video recorder cleanup failed")
+                        emit("recording.finished", {
+                            "status": "failed",
+                            "error": f"{type(exc).__name__}: {exc}",
+                        })
 
             info = agent.last_run_info if agent else {}
             result = RunResult(

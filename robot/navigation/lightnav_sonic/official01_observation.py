@@ -16,12 +16,15 @@ import msgpack
 import numpy as np
 from PIL import Image
 
+from .feedback import yaw_from_wxyz
+
 
 @dataclass(frozen=True)
 class ObservationFrame:
     jpeg: bytes
     wall_time_s: float
     sim_time_s: float
+    yaw_rad: float | None = None
 
     def fresh(self, max_age_s: float) -> bool:
         # All namespace processes share the workstation's wall clock.
@@ -55,9 +58,11 @@ def decode_observation(raw: bytes) -> ObservationFrame:
     sim_time = float(payload["sim_time_s"])
     if not math.isfinite(wall_time) or not math.isfinite(sim_time):
         raise ValueError("observation timestamps must be finite")
+    base_quat = payload.get("base_quat")
+    yaw_rad = None if base_quat is None else yaw_from_wxyz(base_quat)
     buffer = io.BytesIO()
     Image.fromarray(rgb).save(buffer, format="JPEG", quality=90)
-    return ObservationFrame(buffer.getvalue(), wall_time, sim_time)
+    return ObservationFrame(buffer.getvalue(), wall_time, sim_time, yaw_rad)
 
 
 class Official01Subscriber:
@@ -95,3 +100,17 @@ class Official01Subscriber:
     def close(self) -> None:
         self._socket.close()
         self._context.term()
+
+
+class Official01YawSubscriber:
+    """Read root yaw from the host-visible Official01 observation stream."""
+
+    def __init__(self, endpoint: str, _topic: str = "") -> None:
+        self._subscriber = Official01Subscriber(endpoint)
+
+    def latest(self, max_age_s: float) -> float | None:
+        frame = self._subscriber.latest(max_age_s)
+        return frame.yaw_rad if frame is not None else None
+
+    def close(self) -> None:
+        self._subscriber.close()

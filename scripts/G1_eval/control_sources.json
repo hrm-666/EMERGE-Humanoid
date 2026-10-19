@@ -1,0 +1,374 @@
+{
+  "repository": "visionpro_sonic_bridge",
+  "purpose": "External source provenance; large models and binary assets are not included.",
+  "files": [
+    {
+      "path": "integrations/official01_sim_executive/run_mujoco_owner.sh",
+      "sha256": "d30bb813788255148a1adadd7eb139a26de437c3d2b0afa60f3708cbe6c46bf9"
+    },
+    {
+      "path": "integrations/official01_sim_executive/DEVELOPMENT_PLAN.md",
+      "sha256": "96a43dfe713721eec59cb2fbfb25728e223afc882249782250656663bfcfffaa"
+    },
+    {
+      "path": "integrations/official01_sim_executive/stop_sim.sh",
+      "sha256": "23b2b3342a251b66027544717a0713ede34be0de84c559123d1b7c2bb70e6d37"
+    },
+    {
+      "path": "integrations/official01_sim_executive/run_executive.sh",
+      "sha256": "abbc41fefa67b8011468ce87efff8983be30e3880b75e2b92bb60b3cc95cbc9c"
+    },
+    {
+      "path": "integrations/official01_sim_executive/RUNBOOK.md",
+      "sha256": "de6a625432342302a5cb70e9023225b338ec1e04c5d0baeded66710c6fbce4f4"
+    },
+    {
+      "path": "integrations/official01_sim_executive/run_sonic_deploy.sh",
+      "sha256": "64187190744ccaa2dfb397a727766e1200e14daf53dc5801fa04026583e7b979"
+    },
+    {
+      "path": "integrations/official01_sim_executive/check_prerequisites.sh",
+      "sha256": "d5b551a60aca5c82652f70c13d739666d238ee1c8fe8f85e5dcfffb45c8e9300"
+    },
+    {
+      "path": "integrations/official01_sim_executive/sim_observation_input.py",
+      "sha256": "d594aabf5143ae09caf2d24c0f46f5023405c9d158ea1a6dc4c6dc2caa27a3bc"
+    },
+    {
+      "path": "integrations/official01_sim_executive/__init__.py",
+      "sha256": "aa9c23bab95ed16ffce8e6e7ea610218dc04f1415913402e328eb4d4c8c73366"
+    },
+    {
+      "path": "integrations/official01_sim_executive/run_policy_server.sh",
+      "sha256": "8a5d91c6aec8aacaaa09b4cb453127043e05c27e3cbde12c27bff71a9ff74564"
+    },
+    {
+      "path": "integrations/official01_real_deployment/load_official01.py",
+      "sha256": "768ff56f8f9251f125c7eae1eca021a95e46e31fde816e65b0f8335ceee5883e"
+    },
+    {
+      "path": "integrations/official01_real_deployment/inspect_official01.py",
+      "sha256": "04bc9228a96de711f6df6cd9f73ca3868db906f35d1e63992836a952a4353bb7"
+    },
+    {
+      "path": "integrations/official01_real_deployment/official01_executive.py",
+      "sha256": "af139abe5e962e2fdb220d66db1201bcaf4bd8d419203dfe0664b4be78d40f3e"
+    },
+    {
+      "path": "integrations/official01_real_deployment/official01_sim_action_sink.py",
+      "sha256": "17ac4ff3e326b17d574ea29e492c0531189d6264b8924d754c555c6ee3b92aa3"
+    },
+    {
+      "path": "integrations/official01_real_deployment/OFFICIAL01_BODY_PREPARE_DEVELOPMENT_SPEC.md",
+      "sha256": "e110cba5e35e60320e574c9161ef3d0033dd9356c4464df5fc0383b01236915d"
+    },
+    {
+      "path": "integrations/official01_real_deployment/run_vla_official01.sh",
+      "sha256": "6d34e8d5d66630650da836abf9bcb3b91d18985365db744ef8d50840d0af241b"
+    },
+    {
+      "path": "integrations/official01_real_deployment/run_vla_executive_official01.sh",
+      "sha256": "49675f0a852d92e4cb4123c16c610b01aa6e323d12dbe29f71f56b79bf63fc1a"
+    },
+    {
+      "path": "integrations/official01_real_deployment/capture_canonical_pose.py",
+      "sha256": "e4cd01260e42e5d2f06740c2e0d215ccdab6da50da0aa40983cf6612e8ee062f"
+    },
+    {
+      "path": "integrations/official01_real_deployment/run_policy_server_official01.sh",
+      "sha256": "f1f92a2bced45437dea812ab0ed82132d3372a37b85b20937b182a7739f86487"
+    },
+    {
+      "path": "integrations/official01_real_deployment/check_exclusive_official01.sh",
+      "sha256": "15ae97b2f7ac670f4c3ffe60b61806a5e9855b325ef64ff4238c980ae07c6e1f"
+    },
+    {
+      "path": "integrations/official01_real_deployment/executive_poses/README.md",
+      "sha256": "d0846555a388f63593a66e627834a6e7f938325fb7a03297e6aff33a959bd88b"
+    },
+    {
+      "path": "integrations/official01_real_deployment/executive_poses/trajectories/README.md",
+      "sha256": "35ad70db2c1f846c33323d801866fd465d7f109449c3e7c5679374f1023ca072"
+    },
+    {
+      "path": "integrations/official01_real_deployment/executive_poses/poses/POSE_TEMPLATE.yaml",
+      "sha256": "4821538ff9c0898e97b0d54ae1226d728814621f35adc7eec2e461b8b7bafc8c"
+    },
+    {
+      "path": "integrations/official01_real_deployment/executive_poses/poses/hold_r.yaml",
+      "sha256": "1a4f51f3071a8c4dc93a359fa8656713b0f841010f1b1283387a3ef04320f659"
+    },
+    {
+      "path": "integrations/official01_real_deployment/executive_poses/poses/pick_ready_r.yaml",
+      "sha256": "20000c6e2b8e23fa2400f30b8df9937e1f73ada5c60fc9501134847b2109999d"
+    },
+    {
+      "path": "integrations/official01_real_deployment/body_prepare/build_both2_prepare_artifact.py",
+      "sha256": "50b23835497e07942ec7eafbe4bab55ca6fda2b2e9089e1f1858675e816cb3d8"
+    },
+    {
+      "path": "integrations/official01_real_deployment/body_prepare/official03_open_fridge_ep1_initial_pose_v1.yaml",
+      "sha256": "61209f1980736b6a7632c6411c562b3ebc7478e6c61dedabb2927c140558c2dd"
+    },
+    {
+      "path": "integrations/official01_real_deployment/body_prepare/right1_to_sonic_ready_v1.yaml",
+      "sha256": "e2bc694ef51425db4afb952f57f805e6869e3c8ad50457489b6a5a5ed0f245ae"
+    },
+    {
+      "path": "integrations/official01_real_deployment/body_prepare/right2_to_sonic_ready_v1.yaml",
+      "sha256": "08fbc3f20784cd8bb7f4c7a4561595763227c1e5433e501960458c9bb6a41021"
+    },
+    {
+      "path": "integrations/official01_real_deployment/body_prepare/reports/both_to_sonic_ready_v1.json",
+      "sha256": "1169ef5bd41094b233ae38d113234b395043d253c5cc39242ee41a490033ea5e"
+    },
+    {
+      "path": "integrations/official01_real_deployment/body_prepare/reports/right_to_sonic_ready_v1.json",
+      "sha256": "d4f66b4df761a4cc0260d51b1638d53b76fbaa8d7358c8fa08583c3b725bfbd6"
+    },
+    {
+      "path": "integrations/official01_real_deployment/body_prepare/reports/both2_to_sonic_ready_v1.json",
+      "sha256": "0a92492bf05afc9592c393b3f4cf9f14adcd2c4ad22001e02d1d91ca49fc5530"
+    },
+    {
+      "path": "integrations/official01_real_deployment/body_prepare/reports/right2_to_sonic_ready_v1.json",
+      "sha256": "358658a55cbf07bb9131c91e6671956a52469d017b4e95f080edf6136ab32ead"
+    },
+    {
+      "path": "integrations/official01_real_deployment/body_prepare/reports/official03_open_fridge_ep1_initial_pose_v1.json",
+      "sha256": "f9c7bb28b95c52a91c7ed8ae8327bf0a3adca53f78f38db33e5811155e50d6c4"
+    },
+    {
+      "path": "integrations/official01_real_deployment/body_prepare/reports/right1_to_sonic_ready_v1.json",
+      "sha256": "4acb679d0e332b94865fd48ef9b53c7c64a446f433ba8ecaee4a61a0c2fada7d"
+    },
+    {
+      "path": "integrations/official01_real_deployment/body_prepare/artifacts/right1_to_sonic_ready_v1.npz",
+      "sha256": "25661f69af6bd018ef8ccf52f0536062cdc79fc4295d1430171fab944f4a54b0"
+    },
+    {
+      "path": "integrations/official01_real_deployment/body_prepare/artifacts/both_to_sonic_ready_v1.npz",
+      "sha256": "7dad1bcdd3dff57069e7dd67e747afe6cbc02786fd7b35468cc748659b33136a"
+    },
+    {
+      "path": "integrations/official01_real_deployment/body_prepare/artifacts/right2_to_sonic_ready_v1.npz",
+      "sha256": "75543231171befbdeea76405cbfab5b10a4caf76607ff14d743b636c1a27dea3"
+    },
+    {
+      "path": "integrations/official01_real_deployment/body_prepare/artifacts/official03_open_fridge_ep1_initial_pose_v1.npz",
+      "sha256": "8f1a78c067ab062c899049724f177d38c7df07aff2d859a660087b33a9175aa3"
+    },
+    {
+      "path": "integrations/official01_real_deployment/body_prepare/artifacts/both2_to_sonic_ready_v1.npz",
+      "sha256": "031c65a9ae4e45af9b74fe38881b92533a1d148a399a8dc80ee1c17e48d845bf"
+    },
+    {
+      "path": "integrations/inspire_mujoco/posture_audit.py",
+      "sha256": "a368ece86384ef3599f4db4edd66928ef29346a310dd26200edcf8a6f2ad47e3"
+    },
+    {
+      "path": "integrations/inspire_mujoco/p5_task_metrics.py",
+      "sha256": "2e0438099250dfdd371e2872c59e953411c39a0630110aa38eb34a71771db722"
+    },
+    {
+      "path": "integrations/inspire_mujoco/run_official01_sim_policy_query.sh",
+      "sha256": "a195fbc67a5a54bb121889493eb20ba7dd9219c662133a8fc866b14926ce37da"
+    },
+    {
+      "path": "integrations/inspire_mujoco/p5_sim_observation_server.py",
+      "sha256": "a6acebf0c3bd5e0ce79e631035e599ae57b09303e5d089f8bfdaa50d25328d59"
+    },
+    {
+      "path": "integrations/inspire_mujoco/official01_sim_observation_audit.py",
+      "sha256": "fc833755fddadfedcfaf2491d1192bcd0e1be5094515a38e5cb48f4144993830"
+    },
+    {
+      "path": "integrations/inspire_mujoco/inspire_sim_adapter.py",
+      "sha256": "57be21b6fce240bd50b64aa3604168ff9dd83acca67be3b6edd194bdf93c07ae"
+    },
+    {
+      "path": "integrations/inspire_mujoco/build_models.py",
+      "sha256": "b3bd5dfb7941f23bfeba633e61a95686f9e69752fe1669a66562e0022c876050"
+    },
+    {
+      "path": "integrations/inspire_mujoco/run_official01_observation_audit.sh",
+      "sha256": "b369ae850e39894b63db73523f66e05b3f21cf05edf384021373d854781fe72f"
+    },
+    {
+      "path": "integrations/inspire_mujoco/unified_sim_runner.py",
+      "sha256": "a37823c48ab929ae798795d07b466b83ed821c61a15b96c6dca80259745c26e6"
+    },
+    {
+      "path": "integrations/inspire_mujoco/official01_sim_observation.py",
+      "sha256": "b4f1420b091e8e08ce693f552891874b8a65f3b3a7181b558fbe839703693386"
+    },
+    {
+      "path": "integrations/inspire_mujoco/body_only_unitree_bridge.py",
+      "sha256": "a72ee951beaa6199ba27bf1f502e046b883626b81355c533c1c4b0502bcc9760"
+    },
+    {
+      "path": "integrations/inspire_mujoco/README.md",
+      "sha256": "6eb6efce9e05fe5133d974ad998ebb6da7434e5d1c8381c04762ae61ceb11c3c"
+    },
+    {
+      "path": "integrations/inspire_mujoco/official01_sim_policy_query.py",
+      "sha256": "87b01e09ce1f17318157d746a93cf215e59e7f616a342909b96bf4e3ddfe27cf"
+    },
+    {
+      "path": "integrations/inspire_mujoco/p5_debug_video.py",
+      "sha256": "1632775c8266f31eb58b8d6b5e89f942742a77ba27b7fa51bd0ec779cf1788e0"
+    },
+    {
+      "path": "integrations/inspire_mujoco/official01_sim_closed_loop_client.py",
+      "sha256": "3ffd58a1e4517597922d9672453794712125462a1f4473fc34e005f0cf8ec3ce"
+    },
+    {
+      "path": "integrations/inspire_mujoco/scripted_pick_place_test.py",
+      "sha256": "c1862d471cd5ac5ba8e6d3a31e0210bf6133ae900e977c957e73456ecf95845e"
+    },
+    {
+      "path": "integrations/inspire_mujoco/inspire_joint_mapping.py",
+      "sha256": "912de906056db1bf7023a4aee2d063b1de75c2ad1277aa891307ca486e1d2a63"
+    },
+    {
+      "path": "integrations/inspire_mujoco/run_g1_inspire.sh",
+      "sha256": "1382a91d24a18946ce070586ea4313ae2e319bf0cd52584e09e69c20670f9348"
+    },
+    {
+      "path": "integrations/inspire_mujoco/inspire_action_publisher.py",
+      "sha256": "dd7de9bc64366e0727c3c258f93cd382d904116e224ce2406bd1750f73452472"
+    },
+    {
+      "path": "integrations/inspire_mujoco/combined_action_replay.py",
+      "sha256": "a0a550e7a736d3f883f6ba9a7534cdb0697c33ce74f55aa44e3f1357654f2d3e"
+    },
+    {
+      "path": "integrations/inspire_mujoco/run_p5_official01_closed_loop.sh",
+      "sha256": "a08a52efd188daabd2153a3a5eecf434d218c075aa9efd75618d0ca3b20854fd"
+    },
+    {
+      "path": "integrations/inspire_mujoco/hand_action_test.py",
+      "sha256": "fc11037f23073b6974b4b6c75b8b3c0520c5dc5ad3410802eb7e2bd41c0f4a11"
+    },
+    {
+      "path": "integrations/inspire_mujoco/run_tabletop_test.sh",
+      "sha256": "74c720f6b353895cbd93679aa78b9386fa81ba830d1ff0b51b70e056d32ad2ab"
+    },
+    {
+      "path": "integrations/inspire_mujoco/run_official01_sim.sh",
+      "sha256": "cab88a3e95c3ea35482d85eea528c0e240abdac4ad8729d01d195624c1d74a24"
+    },
+    {
+      "path": "integrations/inspire_mujoco/run_hand_action_test.sh",
+      "sha256": "f3871d4616f5ba0d4390659a1c006401523f496b6a14d00b4c8bef396c87c896"
+    },
+    {
+      "path": "integrations/inspire_mujoco/run_combined_control_test.sh",
+      "sha256": "acaefc27fa724df14c977d870a7c0009e7a49eeb6254c299d17044f0eb018eb8"
+    },
+    {
+      "path": "integrations/inspire_mujoco/run_p5_mujoco_observation_server.sh",
+      "sha256": "71f2bc7dca153129a7886e814a9c5b4746768bde0f8b84abbb5aaa3466efdcc8"
+    },
+    {
+      "path": "integrations/inspire_mujoco/__init__.py",
+      "sha256": "da1c8258828893c5b6bef22354e2d05c8eb881f5d596ae47254406cb13a0dcc3"
+    },
+    {
+      "path": "integrations/inspire_mujoco/hand_smoketest.py",
+      "sha256": "368a1a0b40e8afbab712c7a7a58bb92f7d4d65a26acd762ee71a427f04464226"
+    },
+    {
+      "path": "integrations/inspire_mujoco/inspect_model.py",
+      "sha256": "584f16675c7fb39f3d4e912058520fe3a3b88fef742e86c7b29f62f4a16018d4"
+    },
+    {
+      "path": "integrations/inspire_mujoco/hands/inspire_left_fragment.xml",
+      "sha256": "13529379f3afe5efcbdbc311cf1018eb75ebe829cfb6ce5ccc420fa02b43ac7b"
+    },
+    {
+      "path": "integrations/inspire_mujoco/hands/inspire_right_fragment.xml",
+      "sha256": "741fd6ac485c9094af1d46872caa17a5f9c9a73e91550d0e1578a8960fd42d44"
+    },
+    {
+      "path": "integrations/inspire_mujoco/scenes/empty.xml",
+      "sha256": "893307e715512a4ec6bdbaa06933043b4ec0856c5d186ebd88dc36a0494b842d"
+    },
+    {
+      "path": "integrations/inspire_mujoco/scenes/official01_room.xml",
+      "sha256": "b0869e3527663dd6af65129462f1d521aa267acce087a4956ad5310d5b09202b"
+    },
+    {
+      "path": "integrations/inspire_mujoco/scenes/tabletop_pick.xml",
+      "sha256": "94349ca6a047e50203c5aa0f0f6b0011b555bbddc5006fc14ec2d6254a54772c"
+    },
+    {
+      "path": "integrations/inspire_mujoco/objects/plate.xml",
+      "sha256": "32573b5507db0baff77f4b9b27acf46709c5f9ea68a9fb6fbb6ffdce15bc4658"
+    },
+    {
+      "path": "integrations/inspire_mujoco/objects/apple_room.xml",
+      "sha256": "dbb4ae2b90c6a17784b2e0a9083ffa83df081ce90d2b7630692f11744ccd7b54"
+    },
+    {
+      "path": "integrations/inspire_mujoco/objects/cabinet_drawer.xml",
+      "sha256": "d48d56a503960f54c4ca4a828d9c36dbe35dc15bef1486ea58f42a76647dd2c3"
+    },
+    {
+      "path": "integrations/inspire_mujoco/objects/room_5m.xml",
+      "sha256": "0f3136a6dd02b3bcc7865597b5b76d6c9f106682dbfa8d4a7ec2d17b4e8a2536"
+    },
+    {
+      "path": "integrations/inspire_mujoco/objects/lab_table_room.xml",
+      "sha256": "8483e174d8a4b760ccc4f06db168322c8b443412c0c57f8ead660b826e790640"
+    },
+    {
+      "path": "integrations/inspire_mujoco/objects/lab_table.xml",
+      "sha256": "19034dbde1f8f7166a7a7c05f04b6c651c78b00c1e27d3033f0851ee3fc4ec6b"
+    },
+    {
+      "path": "integrations/inspire_mujoco/objects/apple_dynamic.xml",
+      "sha256": "9d67412690d824f18f864a6743cdae7b8da3923d438aa5aee583ad4b6a97c2ec"
+    },
+    {
+      "path": "integrations/inspire_mujoco/robots/g1_inspire/g1_inspire.xml",
+      "sha256": "1674363b90f936aa5323c47a522e13b497bb9d6961d749b0309fdd14ecaf632a"
+    },
+    {
+      "path": "integrations/inspire_mujoco/robots/g1_inspire/g1_29dof_body_only.xml",
+      "sha256": "c9f533646e2118512a9732532ae5d09b675e3f56de55494b9a7cfefe26d6a994"
+    },
+    {
+      "path": "integrations/sonic_sim_isolation/exec_in_sim_dds_ns.sh",
+      "sha256": "f6882ae41e0681b964619c8854ef63b427152833f46babc033b4edefa3b85d96"
+    },
+    {
+      "path": "integrations/sonic_sim_isolation/exec_in_deploy_dds_ns.sh",
+      "sha256": "13c518926257ad3fcc7446ad1f23ead461cfdfc369f3d745c38a369d1d9626d6"
+    },
+    {
+      "path": "integrations/sonic_sim_isolation/setup_isolated_dds_netns.sh",
+      "sha256": "8f8a1d33567d314732e1c13c586582b781b33066011ad03b8960d139ed531759"
+    },
+    {
+      "path": "integrations/sonic_sim_isolation/run_isolated_body_token_replay.sh",
+      "sha256": "b06d8580bb4992d04cb711e2a0ae6b6d3f126a2f00ab59d089f0fffb86e19bf3"
+    },
+    {
+      "path": "integrations/sonic_sim_isolation/teardown_isolated_dds_netns.sh",
+      "sha256": "a5f7a962a26c8478b15d450c40891af562521bd0e11a90f5e0b1960da6877ef8"
+    },
+    {
+      "path": "integrations/sonic_sim_isolation/README.md",
+      "sha256": "055765115954a250b6f68febe33ef6eae13555e60d00a0fa8e15cc4e56341fd6"
+    },
+    {
+      "path": "integrations/sonic_sim_isolation/launch_sonic_deploy_with_ros_env.sh",
+      "sha256": "247bd78404697d8610ee1cbe1df33a70f0b3c7785c3a008d61562572aa44637f"
+    },
+    {
+      "path": "integrations/sonic_sim_isolation/check_isolated_dds_netns.sh",
+      "sha256": "6b90587dce9cf10f9df31104bbe02f7ebda62236d207a475d34f6428fe3b7d72"
+    }
+  ]
+}

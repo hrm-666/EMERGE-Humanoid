@@ -176,6 +176,8 @@ class SkillsLoader:
 
     def _check_requirements(self, skill_meta: dict) -> bool:
         """Check if skill requirements are met (bins, env vars)."""
+        if skill_meta.get("available") is False:
+            return False
         requires = skill_meta.get("requires", {})
         for b in requires.get("bins", []):
             if not shutil.which(b):

@@ -1,20 +1,13 @@
 {
-  "control_root": "/home/embodied/visionpro_sonic_bridge",
-  "runtime": "sim",
+  "control_root": "~/visionpro_sonic_bridge",
+  "runtime": "dry-run",
   "lightnav_server": "ws://127.0.0.1:8051",
   "camera_endpoint": "tcp://127.0.0.1:5560",
   "camera_name": "ego_view",
   "camera_transport": "official01_rgb",
   "sonic_feedback_endpoint": "tcp://127.0.0.1:5557",
   "sonic_feedback_topic": "g1_debug",
-  "control_hz": 4.0,
-  "command_watchdog_s": 0.4,
-  "linear_speed_mps": 0.12,
-  "yaw_rate_rad_s": 0.25,
   "max_micro_duration_s": 2.0,
   "max_inference_duration_s": 60.0,
-  "max_action_runtime_s": 120.0,
-  "default_max_steps": 120,
-  "max_action_steps": 120,
-  "publish_observations": true
+  "publish_observations": false
 }

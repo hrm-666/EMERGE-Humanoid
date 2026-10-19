@@ -1,6 +1,6 @@
 ---
 name: lightnav-sonic-navigation
-description: Use LightNav-0 and SONIC to navigate a simulated Unitree G1 toward a visually identifiable destination through bounded navigate_vln actions, then verify the active plan criterion.
+description: Find and approach a visually identifiable destination with LightNav-0 and SONIC; adjust G1 standing position and heading before manipulation. Use for 寻找、走到、导航、站位调整 and find, approach, walk, align requests.
 ---
 
 # lightnav-sonic-navigation — Visual Navigation
@@ -12,7 +12,8 @@ the active Controller owns dispatch, cancellation, and the planner publisher.
 ## Preconditions and Grounding
 
 Read `EMBODIED.md`, `ROBOT_STATE.md`, and the current `PLAN.md`. Use this Skill
-only when the active embodiment is `lightnav_sonic_g1` and lists `navigate_vln`.
+only when the active embodiment is `lightnav_sonic_g1` or `official01_g1`
+and lists `navigate_vln` (the unified driver also accepts `navigate`).
 The LightNav service, simulation RGB stream, and SONIC yaw feedback must be
 available. The driver checks live inputs during execution; a configured/ready
 connection state alone does not prove that every service is healthy.
@@ -70,8 +71,10 @@ commands: only the Controller may publish SONIC planner commands in this mode.
 The tool returns an action-queue status and a textual result containing JSON
 execution evidence (`status`, `reason`, `ticks`, `command_steps`, `elapsed_s`,
 `lightnav_stop`, last waypoint/yaw, and any error). `ROBOT_STATE.md` records the
-navigation state. The driver attempts locomotion IDLE and closes action resources
-on exit; this is not sensor-confirmed standing stability or a SONIC shutdown.
+navigation state. The standalone driver attempts locomotion IDLE on exit.
+The unified `official01_g1` driver stops locomotion and waits for Executive
+`READY`, retaining arm/hand hold. Neither is proof of semantic arrival; never
+start a second publisher or switch drivers between navigation and manipulation.
 
 | Backend result | Meaning and next step |
 |---|---|
@@ -138,3 +141,50 @@ criterion, reuse that evidence instead of duplicating the call.
 
 This Skill is simulation-only. Hardware deployment belongs to future `real-dev`
 work and is not supplied by this Skill.
+
+## Handoff to Manipulation on `official01_g1`
+
+For a request such as "寻找放有苹果的桌子，走到桌子面前抓起苹果" or
+"Find the table with an apple, walk up to it, and pick up the apple", read
+`gr00t-manipulation` as well. The user need not name Skills or supply budgets.
+Use the native plan to separate approach, manipulation readiness and grasp
+verification; adapt these phases to observations rather than replaying a fixed
+sequence. Send short English phase instructions to the learned policies even
+when the user speaks Chinese; respond to the user in their language.
+
+An approach criterion is not a grasp-readiness criterion. When the target table
+is found, stop and obtain fresh images before refining standing position.
+Do not repeatedly drive forward just because the apple is off-center or hidden.
+Check the known scene, table edge, robot heading and visible clearance first.
+
+Only the unified driver supports `move_micro`. Use `execute_robot_action` with
+`action_type="move_micro"` and `parameters={"direction": "turn_left",
+"duration_s": 0.5, "timeout_s": 15}` for one grounded correction. Supported
+`direction` values are `forward`, `backward`, `left`, `right`, `turn_left`,
+`turn_right`. Default to 0.25–0.5 s pulses; never exceed the configured 2 s ceiling.
+Refresh observation after every pulse. Returned commanded distance and angle
+are command integrals, not measured displacement or guaranteed physical bounds. Do not infer clearance in occluded
+space or use uncalibrated image pixels as metric distances.
+
+Count these dispatched corrections with navigation actions toward the existing
+five-attempt limit for the same standing-position subgoal. Do not evade this
+limit by renaming or replanning the goal. Use early stopping and the existing
+no-progress recovery rules. If the initial approach is achieved, a separately
+planned grasp-alignment subgoal may have its own five-attempt budget; this must
+not disguise an unsuccessful approach.
+
+Let the manipulation Skill define required reachability and preparation.
+If it finds the base pose unsuitable, keep grasping pending and correct the
+standing position through this Skill. After any base motion, invalidate prior
+readiness conclusions and re-observe; after an arm preparation changes the view,
+recheck the target. Never use an arm reset/preparation while carrying an object.
+
+
+## Control Failure Is Not a Motion-Recovery Request
+
+If an action cannot return the Executive to READY, stop dispatching robot actions
+and report the unresolved controller state. A forward micro-motion, a new
+navigation instruction, a zero/tiny duration, or another inference is not a stop
+primitive and cannot recover a non-READY Executive. Only the operator/runtime
+may diagnose and reset that control failure. Task-level visual recovery is
+permitted only while the controller is healthy and READY.

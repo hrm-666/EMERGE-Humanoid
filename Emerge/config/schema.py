@@ -2,7 +2,9 @@
 
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel
+from pydantic import ConfigDict
+from pydantic import Field
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
@@ -73,6 +75,15 @@ class VisualMonitorConfig(Base):
     confirmations: int = Field(default=1, ge=1)
 
 
+class RunRecordingConfig(Base):
+    """Per-run first- and third-person video recording settings."""
+
+    enabled: bool = False
+    endpoint: str = "ipc:///tmp/official01_emerge_observation.ipc"
+    fps: float = Field(default=10.0, gt=0.0, le=60.0)
+    ffmpeg_binary: str = "ffmpeg"
+
+
 class SubagentsConfig(Base):
     """Configuration for specialist sub-agent instances."""
 
@@ -135,6 +146,10 @@ class Config(BaseSettings):
 
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     visual_monitor: VisualMonitorConfig = Field(default_factory=VisualMonitorConfig)
+    run_recording: RunRecordingConfig = Field(
+        default_factory=RunRecordingConfig,
+        alias="runRecording",
+    )
     subagents: SubagentsConfig = Field(default_factory=SubagentsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
