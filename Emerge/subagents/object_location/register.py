@@ -52,6 +52,7 @@ def build_object_location_subagent(
             settings.get("ray_consensus_tolerance_m", 0.02)
         ),
         min_consistent_views=int(settings.get("min_consistent_views", 2)),
+        geometry_backend=str(settings.get("geometry_backend", "auto")),
     )
     observe_tool = ObserveSceneTool(store)
     candidate_tool = SegmentCandidatesTool(engine)
@@ -69,8 +70,8 @@ def build_object_location_subagent(
         name="object_location",
         description=(
             "Locate discrete movable objects and independently segmentable "
-            "destinations, obstacles, and task-relevant visible LIBERO fixtures "
-            "in the world frame from calibrated camera views."
+            "destinations, obstacles, controls, and task-relevant visible fixtures "
+            "in the observation's calibrated coordinate frame."
         ),
         system_prompt=OBJECT_LOCATION_SYSTEM_PROMPT,
         provider=provider,

@@ -8,7 +8,11 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 CONDA_BIN="${CONDA_BIN:-conda}"
 OPENPI_ENV="${OPENPI_ENV:-pi05_server}"
 OPENPI_PYTHON="${OPENPI_PYTHON:-}"
+OPENPI_SERVER_MODE="${OPENPI_SERVER_MODE:-standard}"
+OPENPI_ROOT="${OPENPI_ROOT:-${REPO_ROOT}/third_party/openpi}"
 PERCEPTION_ENV="${PERCEPTION_ENV:-EmergePolicy}"
+SAM3_PYTHON="${SAM3_PYTHON:-}"
+SAM3_PYTHONPATH="${SAM3_PYTHONPATH:-}"
 WAM_ENV="${WAM_ENV:-cosmos-policy}"
 WAM_PYTHON="${WAM_PYTHON:-}"
 PORT_CHECK_PYTHON="${PORT_CHECK_PYTHON:-}"
@@ -27,6 +31,12 @@ WAM_GPU="${WAM_GPU:-0}"
 
 OPENPI_CONFIG="${OPENPI_CONFIG:-pi05_libero}"
 OPENPI_CHECKPOINT="${OPENPI_CHECKPOINT:-${REPO_ROOT}/checkpoints/pi05_libero}"
+OPENPI_B1K_ROBOT="${OPENPI_B1K_ROBOT:-b1k/R1Pro}"
+OPENPI_B1K_TASK="${OPENPI_B1K_TASK:-b1k/turning_on_radio}"
+OPENPI_B1K_REPO_ID="${OPENPI_B1K_REPO_ID:-turning_on_radio}"
+OPENPI_B1K_POLICY_CONFIG="${OPENPI_B1K_POLICY_CONFIG:-pi05_b1k}"
+OPENPI_CHAMPION_MAPPING="${OPENPI_CHAMPION_MAPPING:-${OPENPI_ROOT}/task_checkpoint_mapping.json}"
+OPENPI_CHAMPION_POLICY_CONFIG="${OPENPI_CHAMPION_POLICY_CONFIG:-pi_behavior_b1k_fast}"
 OPENPI_MAX_BATCH_SIZE="${OPENPI_MAX_BATCH_SIZE:-4}"
 OPENPI_BATCH_WAIT_MS="${OPENPI_BATCH_WAIT_MS:-10}"
 VGGT_MAX_BATCH_SIZE="${VGGT_MAX_BATCH_SIZE:-4}"
@@ -35,6 +45,9 @@ SAM3_MAX_BATCH_SIZE="${SAM3_MAX_BATCH_SIZE:-4}"
 SAM3_BATCH_WAIT_MS="${SAM3_BATCH_WAIT_MS:-0}"
 VGGT_CHECKPOINT="${VGGT_CHECKPOINT:-${REPO_ROOT}/checkpoints/vggt/model.pt}"
 SAM3_CHECKPOINT="${SAM3_CHECKPOINT:-${REPO_ROOT}/checkpoints/sam3/model.pt}"
+SAM3_BACKEND="${SAM3_BACKEND:-official}"
+SAM3_CONFIDENCE_THRESHOLD="${SAM3_CONFIDENCE_THRESHOLD:-0.3}"
+SAM3_MASK_THRESHOLD="${SAM3_MASK_THRESHOLD:-0.5}"
 WAM_POLICY_CHECKPOINT="${WAM_POLICY_CHECKPOINT:-${REPO_ROOT}/checkpoints/cosmos-policy/Cosmos-Policy-LIBERO-Predict2-2B.pt}"
 WAM_BASE_MODEL_DIR="${WAM_BASE_MODEL_DIR:-${REPO_ROOT}/checkpoints/cosmos-policy/Cosmos-Predict2-2B-Video2World}"
 WAM_DATASET_STATS="${WAM_DATASET_STATS:-${REPO_ROOT}/checkpoints/cosmos-policy/libero_dataset_statistics.json}"
@@ -76,6 +89,10 @@ Service selection and runtime:
                                 (default: auto-detect python3 or python)
 
 OpenPI:
+  OPENPI_SERVER_MODE             standard, behavior_b1k, or behavior_champion
+                                (default: standard)
+  OPENPI_ROOT                    Policy checkout used by a BEHAVIOR mode
+                                (default: <repo>/third_party/openpi)
   OPENPI_ENV                    Conda environment (default: pi05_server)
   OPENPI_PYTHON                 Direct Python executable; bypasses OPENPI_ENV
                                 (default: empty)
@@ -84,6 +101,15 @@ OpenPI:
   OPENPI_CONFIG                 Training config name (default: pi05_libero)
   OPENPI_CHECKPOINT             Checkpoint directory
                                 (default: <repo>/checkpoints/pi05_libero)
+  OPENPI_B1K_ROBOT              BEHAVIOR robot key (default: b1k/R1Pro)
+  OPENPI_B1K_TASK               BEHAVIOR task key
+                                (default: b1k/turning_on_radio)
+  OPENPI_B1K_REPO_ID            Norm-stat repository ID
+                                (default: turning_on_radio)
+  OPENPI_B1K_POLICY_CONFIG      OpenPI training config (default: pi05_b1k)
+  OPENPI_CHAMPION_MAPPING       Champion task-to-checkpoint mapping file
+  OPENPI_CHAMPION_POLICY_CONFIG Champion policy config
+                                (default: pi_behavior_b1k_fast)
   OPENPI_MAX_BATCH_SIZE         Maximum requests per batch (default: 4)
   OPENPI_BATCH_WAIT_MS          Maximum batch collection time in ms
                                 (default: 10)
@@ -91,6 +117,10 @@ OpenPI:
 VGGT and SAM3 runtime:
   PERCEPTION_ENV                Shared Conda environment
                                 (default: EmergePolicy)
+  SAM3_PYTHON                   Direct Python executable for SAM3; bypasses
+                                PERCEPTION_ENV (default: empty)
+  SAM3_PYTHONPATH               Extra import path for the direct SAM3 Python
+                                environment (default: empty)
 
 VGGT:
   VGGT_PORT                     Service port (default: 8001)
@@ -104,8 +134,11 @@ VGGT:
 SAM3:
   SAM3_PORT                     Service port (default: 8002)
   SAM3_GPU                      CUDA_VISIBLE_DEVICES (default: 2)
-  SAM3_CHECKPOINT               Model file
+  SAM3_CHECKPOINT               Model file or Transformers checkpoint directory
                                 (default: <repo>/checkpoints/sam3/model.pt)
+  SAM3_BACKEND                  official or transformers (default: official)
+  SAM3_CONFIDENCE_THRESHOLD     Detection threshold (default: 0.3)
+  SAM3_MASK_THRESHOLD           Pixel mask threshold (default: 0.5)
   SAM3_MAX_BATCH_SIZE           Maximum requests per batch (default: 4)
   SAM3_BATCH_WAIT_MS            Maximum batch collection time in ms
                                 (default: 0)
@@ -389,12 +422,39 @@ echo "Selected services: ${SERVICES}"
 
 if service_enabled openpi; then
     check_port "OpenPI" "${OPENPI_PORT}"
+    case "${OPENPI_SERVER_MODE}" in
+        standard) ;;
+        behavior_b1k)
+            require_path "OpenPI root" "${OPENPI_ROOT}"
+            require_path "BEHAVIOR OpenPI server" "${OPENPI_ROOT}/scripts/b1k/serve_b1k.py"
+            require_path "BEHAVIOR π0.5 checkpoint" "${OPENPI_CHECKPOINT}"
+            if [[ -z "${OPENPI_PYTHON}" ]]; then
+                echo -e "${RED}✗ behavior_b1k mode requires OPENPI_PYTHON${RESET}" >&2
+                exit 1
+            fi
+            ;;
+        behavior_champion)
+            require_path "champion policy root" "${OPENPI_ROOT}"
+            require_path "champion BEHAVIOR server" "${OPENPI_ROOT}/scripts/serve_b1k.py"
+            require_path "champion initial checkpoint" "${OPENPI_CHECKPOINT}"
+            require_path "champion checkpoint mapping" "${OPENPI_CHAMPION_MAPPING}"
+            if [[ -z "${OPENPI_PYTHON}" ]]; then
+                echo -e "${RED}✗ behavior_champion mode requires OPENPI_PYTHON${RESET}" >&2
+                exit 1
+            fi
+            ;;
+        *)
+            echo -e "${RED}✗ OPENPI_SERVER_MODE must be standard, behavior_b1k, or behavior_champion${RESET}" >&2
+            exit 2
+            ;;
+    esac
 fi
 if service_enabled vggt; then
     check_port "VGGT" "${VGGT_PORT}"
 fi
 if service_enabled sam3; then
     check_port "SAM3" "${SAM3_PORT}"
+    require_path "SAM3 checkpoint" "${SAM3_CHECKPOINT}"
 fi
 if service_enabled cosmos; then
     check_port "Cosmos WAM" "${WAM_PORT}"
@@ -410,26 +470,61 @@ if service_enabled cosmos; then
 fi
 
 if service_enabled openpi; then
-    openpi_command=(
-        "${OPENPI_PYTHON:-python}" -m external_model_server.openpi_batch_server
-        --config-name "${OPENPI_CONFIG}"
-        --checkpoint-dir "${OPENPI_CHECKPOINT}"
-        --port "${OPENPI_PORT}"
-        --max-batch-size "${OPENPI_MAX_BATCH_SIZE}"
-        --batch-wait-ms "${OPENPI_BATCH_WAIT_MS}"
-    )
-    if [[ -n "${OPENPI_PYTHON}" ]]; then
-        start_server_with_python \
-            "OpenPI server :${OPENPI_PORT}" \
+    if [[ "${OPENPI_SERVER_MODE}" == "behavior_b1k" ]]; then
+        openpi_command=(
+            "${OPENPI_PYTHON}"
+            scripts/b1k/serve_b1k.py
+            --robot "${OPENPI_B1K_ROBOT}"
+            --task "${OPENPI_B1K_TASK}"
+            --repo-id "${OPENPI_B1K_REPO_ID}"
+            --policy.config "${OPENPI_B1K_POLICY_CONFIG}"
+            --policy.dir "${OPENPI_CHECKPOINT}"
+            --port "${OPENPI_PORT}"
+        )
+        start_server_with_python_in_directory \
+            "OpenPI BEHAVIOR server :${OPENPI_PORT}" \
             "${OPENPI_PYTHON}" \
             "${OPENPI_GPU}" \
+            "${OPENPI_ROOT}" \
+            "${openpi_command[@]}"
+    elif [[ "${OPENPI_SERVER_MODE}" == "behavior_champion" ]]; then
+        openpi_command=(
+            "${OPENPI_PYTHON}"
+            scripts/serve_b1k.py
+            --port "${OPENPI_PORT}"
+            --task-checkpoint-mapping "${OPENPI_CHAMPION_MAPPING}"
+            policy:checkpoint
+            --policy.config "${OPENPI_CHAMPION_POLICY_CONFIG}"
+            --policy.dir "${OPENPI_CHECKPOINT}"
+        )
+        start_server_with_python_in_directory \
+            "OpenPI BEHAVIOR champion server :${OPENPI_PORT}" \
+            "${OPENPI_PYTHON}" \
+            "${OPENPI_GPU}" \
+            "${OPENPI_ROOT}" \
             "${openpi_command[@]}"
     else
-        start_server \
-            "OpenPI server :${OPENPI_PORT}" \
-            "${OPENPI_ENV}" \
-            "${OPENPI_GPU}" \
-            "${openpi_command[@]}"
+        openpi_command=(
+            "${OPENPI_PYTHON:-python}" -m external_model_server.openpi_batch_server
+            --config-name "${OPENPI_CONFIG}"
+            --checkpoint-dir "${OPENPI_CHECKPOINT}"
+            --port "${OPENPI_PORT}"
+            --max-batch-size "${OPENPI_MAX_BATCH_SIZE}"
+            --batch-wait-ms "${OPENPI_BATCH_WAIT_MS}"
+        )
+        if [[ -n "${OPENPI_PYTHON}" ]]; then
+            start_server_with_python \
+                "OpenPI server :${OPENPI_PORT}" \
+                "${OPENPI_PYTHON}" \
+                "${OPENPI_GPU}" \
+                "${openpi_command[@]}"
+        else
+            start_server \
+                "OpenPI server :${OPENPI_PORT}" \
+                "${OPENPI_ENV}" \
+                "${OPENPI_GPU}" \
+                "${openpi_command[@]}"
+        fi
     fi
 fi
 
@@ -446,15 +541,38 @@ if service_enabled vggt; then
 fi
 
 if service_enabled sam3; then
-    start_server \
-        "SAM3 server :${SAM3_PORT}" \
-        "${PERCEPTION_ENV}" \
-        "${SAM3_GPU}" \
-        python -m external_model_server.sam3_server \
-        --model-path "${SAM3_CHECKPOINT}" \
-        --port "${SAM3_PORT}" \
-        --max-batch-size "${SAM3_MAX_BATCH_SIZE}" \
+    sam3_python_command=(
+        "${SAM3_PYTHON:-python}"
+        -m external_model_server.sam3_server
+        --model-path "${SAM3_CHECKPOINT}"
+        --backend "${SAM3_BACKEND}"
+        --confidence-threshold "${SAM3_CONFIDENCE_THRESHOLD}"
+        --mask-threshold "${SAM3_MASK_THRESHOLD}"
+        --port "${SAM3_PORT}"
+        --max-batch-size "${SAM3_MAX_BATCH_SIZE}"
         --batch-wait-ms "${SAM3_BATCH_WAIT_MS}"
+    )
+    if [[ -n "${SAM3_PYTHONPATH}" ]]; then
+        sam3_command=(
+            env "PYTHONPATH=${REPO_ROOT}:${SAM3_PYTHONPATH}${PYTHONPATH:+:${PYTHONPATH}}"
+            "${sam3_python_command[@]}"
+        )
+    else
+        sam3_command=("${sam3_python_command[@]}")
+    fi
+    if [[ -n "${SAM3_PYTHON}" ]]; then
+        start_server_with_python \
+            "SAM3 server :${SAM3_PORT}" \
+            "${SAM3_PYTHON}" \
+            "${SAM3_GPU}" \
+            "${sam3_command[@]}"
+    else
+        start_server \
+            "SAM3 server :${SAM3_PORT}" \
+            "${PERCEPTION_ENV}" \
+            "${SAM3_GPU}" \
+            "${sam3_command[@]}"
+    fi
 fi
 
 if service_enabled cosmos; then

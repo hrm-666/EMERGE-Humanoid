@@ -11,17 +11,23 @@ Use `vla_execute` for fine manipulation that benefits from continuous visual cor
 ## Before Execution
 
 Identify the current manipulation target and intended local change. Treat the
-complete task only as context; do not use it as the current VLA instruction.
+complete task only as context unless the active embodiment requires its fixed
+episode instruction for every VLA call.
 Preserve already acceptable task relations when continuing a multi-object task.
 
 Use VLA when the target is visible and the next phase involves adaptive alignment or contact. If the end-effector is far from an ordinary object and no pose-sensitive interaction is required, use attach for the coarse approach first.
 
 ### Phase-Local Instructions
 
-Every `vla_execute` instruction must describe exactly the next unfinished
+Every `vla_execute` instruction normally describes exactly the next unfinished
 visual-contact phase, even when the current PLAN subgoal combines grasp,
-transport, and placement. Never copy the Mission, mention a later object, or
-combine grasp and final placement in one instruction.
+transport, and placement. The active embodiment profile is authoritative:
+when it declares a fixed episode instruction, copy the runtime
+`effective_prompt` exactly for every VLA call and keep the current phase in the
+plan and reasoning instead. Never rewrite a fixed checkpoint instruction.
+
+When the embodiment accepts phase-local prompts, never copy the Mission,
+mention a later object, or combine grasp and final placement in one instruction.
 
 Keep it to one short imperative sentence: include only the current action,
 active object, and destination when needed. Omit reasoning, observations,

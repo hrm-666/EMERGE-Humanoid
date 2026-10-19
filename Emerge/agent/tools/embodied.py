@@ -16,13 +16,13 @@ except ImportError:  # pragma: no cover - fallback for lightweight test envs
 
 from Emerge.base import Tool
 from Emerge.utils.action_queue import (
+    action_timestamp,
     append_action,
     empty_action_document,
     normalize_action_document,
     parse_action_markdown,
     pending_action_type,
     update_action_document,
-    action_timestamp,
 )
 
 if TYPE_CHECKING:
@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 
 _BASE_RESULT_TIMEOUT_S = 60.0
 _VLA_PER_STEP_TIMEOUT_S = 15.0
+_PRIMITIVE_RESULT_TIMEOUT_S = 600.0
 
 
 class EmbodiedActionTool(Tool):
@@ -44,9 +45,11 @@ class EmbodiedActionTool(Tool):
     def description(self) -> str:
         return (
             "Execute a physical action on the robot. "
-            "Use explicit geometry-driven motion primitives for coarse approach and clear-space transport. "
+            "The actions and parameters accepted by the active embodiment are the ones listed in "
+            "its EMBODIED.md profile; read that file before assuming a motion primitive exists. "
+            "Use explicit geometry-driven motion primitives for coarse approach and clear-space transport when the embodiment provides them. "
             "Choose concrete poses, line segments, arc geometry, and gripper openings from the latest ROBOT_STATE.md or a successful object_location result. "
-            "Use vla_execute for the current visually sensitive contact phase; in a multi-step plan its instruction must describe only the current subgoal, not the complete mission. "
+            "Use vla_execute for the current visually sensitive phase. Its instruction and step budget follow the active embodiment: some drivers require a phase-local instruction, while a single-task checkpoint may require the exact task sentence and reject any rewrite. "
             "Every tool call MUST include a non-empty `parameters` object. "
             "Do not call this tool with only `action_type` and `reasoning`."
         )
@@ -64,7 +67,9 @@ class EmbodiedActionTool(Tool):
                         "- 'move_linear': Move end-effector linearly (straight line) to target or by delta\n"
                         "- 'set_gripper': Set gripper opening (open/close command or specific width in meters)\n"
                         "- 'follow_arc': Move end-effector along an arc (circular motion)\n"
-                        "- 'vla_execute': Execute the current phase's natural language instruction using the VLA policy"
+                        "- 'vla_execute': Execute the current phase's natural language instruction using the VLA policy\n"
+                        "- 'navigate_vln': Follow a navigation instruction with LightNav when the active embodiment supports it\n"
+                        "- 'hold_position': Repeat current joints with zero base velocity when the active embodiment supports it"
                     ),
                 },
                 "parameters": {
@@ -72,20 +77,21 @@ class EmbodiedActionTool(Tool):
                     "description": (
                         "The parameters for the action. "
                         "Vector parameters prefer list form like [x,y,z], but keyed objects like {x,y,z} are accepted. "
-                        "Simulation end-effector targets use metres; Panda reach is approximately 0.85 m from the current robot base pose in ROBOT_STATE.md, and negative x/y values can be valid. "
+                        "Units and reach limits are properties of the active embodiment, not of this schema: "
+                        "the bundled LIBERO/Panda simulation profile uses metres with roughly 0.85 m of reach from the base pose, and negative x/y values can be valid. "
                         "Examples:\n"
-                        "- move_to_pose: {position_m: [x,y,z], orientation_euler: [r,p,y]} or {orientation_quat: [x,y,z,w]}\n"
+                        "- move_to_pose: {position_m: [x,y,z], orientation_euler: [r,p,y]} or {orientation_quat: [x,y,z,w]}; an embodiment may also accept a measured bounding box\n"
                         "- move_linear: {position_m: [x,y,z]} or {delta_m: [dx,dy,dz]}, optionally with orientation\n"
                         "- set_gripper: {opening_m: 0.08} or {command: 'open'} or {command: 'close'}\n"
                         "- follow_arc: {center: [x,y,z], axis: [x,y,z], radius_m: 0.1, angle_deg: 90}\n"
                         "- vla_execute: {instruction: 'pick up the red block', step: 40}\n"
-                        "For move_to_pose, ALWAYS provide position_m and either orientation_euler or orientation_quat. "
+                        "- navigate_vln: {instruction: 'Approach the radio', max_steps: 900}\n"
+                        "For move_to_pose, provide the target form required by the active embodiment profile; orientation requirements are also embodiment-specific. "
                         "For move_linear, ALWAYS provide either position_m or delta_m. "
                         "For follow_arc, ALWAYS provide center, axis, radius_m, and one of angle_deg or angle_rad. "
-                        "For vla_execute, ALWAYS provide a natural language instruction (or prompt) AND step "
-                        "(the number of action steps the VLA runs before returning control to you). "
-                        "The action completes when the step budget is used up or the goal is reached earlier, "
-                        "so you can interleave VLA with rule-based actions."
+                        "For vla_execute, ALWAYS provide the instruction (or prompt) AND step. "
+                        "`step` is the number of policy actions the VLA may consume before returning control to you. "
+                        "The action completes when that budget is used up, or earlier if the driver reports that the episode ended."
                     ),
                 },
                 "reasoning": {
@@ -137,11 +143,28 @@ class EmbodiedActionTool(Tool):
     @staticmethod
     def _result_timeout(action_type: str, parameters: dict[str, Any]) -> float:
         """Backstop wait budget, scaled by the action's step count."""
+        if action_type == "navigate_vln":
+            try:
+                wall_time_s = float(parameters.get("max_wall_time_s", 1800))
+            except (TypeError, ValueError):
+                wall_time_s = 1800
+            return _BASE_RESULT_TIMEOUT_S + max(0.0, min(wall_time_s, 7200.0))
         if action_type == "vla_execute":
             try:
                 step = max(0, int(parameters.get("step", 0)))
             except (TypeError, ValueError):
                 step = 0
+            return _BASE_RESULT_TIMEOUT_S + step * _VLA_PER_STEP_TIMEOUT_S
+        if action_type in {"move_to_pose", "move_linear", "adjust_posture"}:
+            # BEHAVIOR may need up to primitive_max_steps simulator round
+            # trips.  The geometric action parameters do not expose that
+            # generated trajectory length to the Agent tool.
+            return _PRIMITIVE_RESULT_TIMEOUT_S
+        if action_type in {"set_gripper", "hold_position"}:
+            try:
+                step = max(1, int(parameters.get("steps", parameters.get("step", 1))))
+            except (TypeError, ValueError):
+                step = 1
             return _BASE_RESULT_TIMEOUT_S + step * _VLA_PER_STEP_TIMEOUT_S
         return _BASE_RESULT_TIMEOUT_S
 
