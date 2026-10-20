@@ -64,26 +64,20 @@ class ExecutiveNavigationRunner:
         self._sleep = sleep
 
     @staticmethod
-    def _command_key(command: Any, yaw: float) -> str | None:
-        """Quantize a validated SONIC command to the executive's safe key set."""
+    def _body_velocity(command: Any, yaw: float,
+                       period_s: float) -> tuple[float, float, float]:
+        """Retain both translation and facing instead of selecting one key."""
         if command.is_idle:
-            return None
+            return (0.0, 0.0, 0.0)
+        wx, wy, _ = command.movement_direction
+        speed = max(0.0, command.movement_speed)
+        forward = speed * (math.cos(yaw) * wx + math.sin(yaw) * wy)
+        lateral = speed * (-math.sin(yaw) * wx + math.cos(yaw) * wy)
         target_yaw = math.atan2(command.facing_direction[1],
                                 command.facing_direction[0])
         yaw_error = math.atan2(math.sin(target_yaw - yaw),
                                math.cos(target_yaw - yaw))
-        if abs(yaw_error) >= 0.04:
-            return "q" if yaw_error > 0 else "e"
-        wx, wy, _ = command.movement_direction
-        cos_yaw = math.cos(yaw)
-        sin_yaw = math.sin(yaw)
-        forward = cos_yaw * wx + sin_yaw * wy
-        lateral = -sin_yaw * wx + cos_yaw * wy
-        if max(abs(forward), abs(lateral)) < 1e-6:
-            return None
-        if abs(forward) >= abs(lateral):
-            return "w" if forward >= 0 else "s"
-        return "a" if lateral >= 0 else "d"
+        return forward, lateral, yaw_error / period_s
 
     def run(
         self,
@@ -102,7 +96,14 @@ class ExecutiveNavigationRunner:
         deadline = started + self.config.max_runtime_s
         period_s = 1.0 / self.config.control_hz
         adapter = LightNav2SonicAdapter(
-            AdapterLimits(control_period_s=period_s))
+            AdapterLimits(control_period_s=period_s,
+                          max_forward_mps=self.executive.linear_speed_mps,
+                          max_lateral_mps=min(0.15,
+                                              self.executive.linear_speed_mps),
+                          max_planar_mps=self.executive.linear_speed_mps,
+                          max_yaw_rate_rps=self.executive.yaw_rate_rad_s,
+                          position_tolerance_m=0.02,
+                          yaw_tolerance_rad=0.02))
         camera_source = yaw_source = lightnav = None
         ticks = command_steps = stale_ticks = 0
         last_waypoint: tuple[float, float, float] | None = None
@@ -249,16 +250,13 @@ class ExecutiveNavigationRunner:
                         result = finish("completed", "lightnav_stop")
                         break
                     command = adapter.convert_or_idle(last_waypoint, yaw)
-                    key = self._command_key(command, yaw)
-                    if key is not None:
-                        if not moving:
-                            self.executive.begin_moving(timeout_s=10.0)
-                            moving = True
-                        self.executive.send_nav_key(key)
+                    velocity = self._body_velocity(command, yaw, period_s)
+                    if not moving:
+                        self.executive.begin_moving(timeout_s=10.0)
+                        moving = True
+                    self.executive.send_nav_velocity(*velocity)
+                    if any(abs(value) > 1e-9 for value in velocity):
                         command_steps += 1
-                    elif moving:
-                        self.executive.stop_moving(timeout_s=15.0)
-                        moving = False
                     if state_callback is not None:
                         state_callback({
                             "status": "running",
@@ -269,6 +267,7 @@ class ExecutiveNavigationRunner:
                             "last_yaw_rad": yaw,
                             "last_waypoint": list(last_waypoint),
                             "last_error": None,
+                            "commanded_body_velocity": list(velocity),
                         })
                 remaining = period_s - (self._monotonic() - tick_started)
                 if remaining > 0:

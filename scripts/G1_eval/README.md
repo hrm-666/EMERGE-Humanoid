@@ -323,3 +323,66 @@ validate it in the room (including the 8 cm table-height difference), establish
 an observable navigation-to-grasp handoff, and rerun the unmodified natural task
 through the UI. No successful room grasp baseline has yet been supplied or
 established by these tests.
+
+
+### Early navigation stop: interface fix and bounded comparisons (2026-10-20)
+
+The UI run `5d694b68df224974837dab20c9865790` stopped at LightNav tick 32.
+The policy emitted its stop token and an all-zero waypoint chunk. At that instant
+base x was about 0.678 m and the near table edge x about 1.679 m: approximately
+1.00 m of base-to-edge separation along world X. The apple was near the top of
+the ego image, not its center. This was a real model stop, not a decoded stop bug.
+These coordinates are evaluation evidence, never inputs to the learned policy.
+
+Two integration defects were also present. A 0.12 m waypoint deadband discarded
+real 0.108 m forward waypoints; converting the remaining waypoints to one keyboard
+key discarded simultaneous translation/turning and the commanded speed magnitude.
+The simulation adapter now uses a 0.02 m / 0.02 rad deadband and sends bounded
+body-frame `(forward_mps, lateral_mps, yaw_rate_rad_s)` through the existing single
+Executive. Planar/yaw limits come from the Executive configuration. Both client
+and runtime reject non-finite/excess commands and invalid control states. The
+existing 0.4 s command watchdog still zeros motion if commands stop arriving.
+A non-stop zero waypoint sends zero velocity without READY/MOVING cycling;
+a model stop still ends the action. `move_micro` retains its original protocol.
+This does not enable continuous navigation on real hardware.
+
+Native Skill instructions now preserve close-approach intent and the complete
+visual criterion. Seeing the apple/table edge, policy stop and READY cannot
+substitute for grasp reachability. An incomplete approach remains active;
+one evidence-grounded local approach can be replanned within the same five-action
+budget. The user still supplies only their natural-language task. These are
+Agent instructions, not a newly enforced geometric grasp-readiness gate.
+
+Support-off GPU/SONIC comparisons, with support restored before owner shutdown:
+
+| Trial | Base X start -> stopped (m) | Result |
+|---|---|---|
+| Old adapter, original instruction | -0.091 -> 0.459 | Policy stop, READY, 15 ticks |
+| Fixed adapter, original instruction | -0.048 -> 0.757 | Policy stop, READY, 26 ticks |
+| Fixed adapter, `Approach the apple table until it is within arm reach. Face the apple.` | 0.106 -> 1.027 | Policy stop, READY, 21 ticks |
+| Fixed adapter, close approach followed by `Move closer to the front edge of the table with the apple.` | -0.098 -> 1.416 | Second action cancelled by evaluation boundary, READY |
+
+These are individual diagnostic trials, not success-rate measurements or perfectly
+matched starting poses. The last trial crossed the x=1.35 m evaluation boundary
+and stopped at x=1.416 m; it did **not** demonstrate a policy-selected final stop.
+The boundary was never passed to LightNav and must not become a task controller.
+All trials remained upright at about real time. No grasp policy or company LLM
+was called by these comparisons; full UI planning and successful grasping have
+not been revalidated by this diagnostic.
+
+Evidence is retained locally under `outputs/g1_integration/` (Git-ignored):
+`nav-baseline-20261020_122347`, `nav-continuous-20261020_122602`,
+`nav-arm-reach-20261020_123505`, and `nav-local-recovery-20261020_123903`.
+Each measured trial has `result.json`, `telemetry.json` and `frames/`.
+The new trials also retain their diagnostic script. The separate
+`navigation-stop-replay.json` records open-loop replay of the old 32 ego frames:
+changing wording can remove stop on those frames but does not establish closed-
+loop arrival. Do not present replay or the evaluation cancellation as success.
+
+Upstream `LightNav-0/docs/EVAL_HABITAT.md` reports a 3.0 m VLN-CE success radius;
+ObjectNav uses distances to goal viewpoints. Those benchmark definitions do not
+certify a G1 grasp pose, and are not a hard-coded stop radius in this integration.
+There is no demonstrated reliable close-range stopping/readiness gate yet. Next
+acceptance requires an observable, calibrated grasp-start envelope, comparison
+against known-good GR00T starts in this room, and autonomous UI verification of
+approach/recovery without the evaluation boundary supplying task completion.

@@ -34,6 +34,12 @@ or invent a world pose. If the initial conditions cannot be established, report
 uncertainty or request a supported standing-position correction rather than
 claiming readiness from a successful action status.
 
+Carry the full readiness criterion into the verification request. A verifier's
+uncertain reach/alignment verdict stays uncertain even when the Controller is
+READY. READY establishes the control state, not the object's reachability.
+If navigation merely found the table, keep the incomplete approach active;
+do not use a grasp window to compensate for missing approach evidence.
+
 Body translation/heading corrections belong to navigation (`move_micro`).
 Hand/arm preparation belongs here (`run_fixed_action`). After a correction,
 re-observe and re-evaluate the same readiness criterion before inference.

@@ -29,6 +29,12 @@ rejection, or inability to return READY as failures.
 ## Known limitations
 
 - Navigation stop or budget exhaustion is not evidence of an accurate grasp pose.
+  A visible table edge or centered apple is also insufficient. Preserve the full
+  close-approach/readiness criterion when requesting visual verification; READY
+  cannot override uncertainty about reachability or alignment.
+- Simulation navigation preserves simultaneous bounded body translation and yaw
+  through the single Executive and its command watchdog. Continuous navigation
+  has not been enabled for real hardware.
 - Micro-motion `commanded_distance_m`/`commanded_angle_rad` integrate the
   configured command over its duration. They are not measured motion or hard
   physical bounds; gait startup, lag and stopping dynamics can change displacement.

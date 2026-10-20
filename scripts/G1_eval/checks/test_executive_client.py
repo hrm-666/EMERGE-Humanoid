@@ -7,6 +7,7 @@ from unittest import mock
 
 import numpy as np
 
+from robot.drivers.official01_executive import ExecutiveClientError
 from robot.drivers.official01_executive import ExecutiveProcessClient
 from robot.drivers.official01_runtime import NavigationHoldMixin
 
@@ -178,3 +179,79 @@ class NavigationRestTest(unittest.TestCase):
                         side_effect=[1., 1.6]):
             self.assertFalse(self.runtime._stable(self.debug))
             self.assertTrue(self.runtime._stable(self.debug))
+
+
+class NavigationVelocityTest(unittest.TestCase):
+    """Exercise the actual client and runtime velocity boundary."""
+
+    def setUp(self):
+        self.client = ExecutiveProcessClient("/tmp/control",
+                                             runtime="sim",
+                                             linear_speed_mps=0.25,
+                                             yaw_rate_rad_s=0.25)
+        self.client._state = "MOVING"
+        self.client._write = mock.Mock()
+        self.runtime = StableHold()
+        self.runtime._command_error = ValueError
+        self.runtime.state = "MOVING"
+        self.runtime.stop_requested = False
+        self.runtime.nav = np.zeros(3)
+        self.runtime.args = SimpleNamespace(keyboard_slow_linear_speed=0.25,
+                                            keyboard_yaw_rate=0.25,
+                                            keyboard_slow_duration_s=0.4)
+
+    def test_combined_velocity_reaches_runtime_with_watchdog(self):
+        values = (0.2, -0.15, 0.25)
+        self.client.send_nav_velocity(*values)
+        text = self.client._write.call_args.args[0]
+        command = SimpleNamespace(name="nav_velocity",
+                                  args=text.split()[1:],
+                                  text=text)
+        with mock.patch("robot.drivers.official01_runtime.time.monotonic",
+                        return_value=123.):
+            self.runtime._handle_command(command)
+        np.testing.assert_allclose(self.runtime.nav, values)
+        self.assertEqual(self.runtime.nav_timeout_s, 0.4)
+        self.assertEqual(self.runtime.nav_updated, 123.)
+
+    def test_client_rejects_invalid_or_excess_velocity(self):
+        for values in [(float("nan"), 0, 0), (0, float("inf"), 0), (True, 0, 0),
+                       (0.25, 0.25, 0), (0, 0, -0.26)]:
+            with self.subTest(
+                    values=values), self.assertRaises(ExecutiveClientError):
+                self.client.send_nav_velocity(*values)
+        self.client._write.assert_not_called()
+
+    def test_client_requires_simulation_and_moving(self):
+        for runtime, state in [("real", "MOVING"), ("sim", "READY")]:
+            self.client.runtime = runtime
+            self.client._state = state
+            with self.subTest(
+                    runtime=runtime,
+                    state=state), self.assertRaises(ExecutiveClientError):
+                self.client.send_nav_velocity(0.1, 0, 0)
+        self.client._write.assert_not_called()
+
+    def test_runtime_rejects_bad_commands_without_refreshing_watchdog(self):
+        self.runtime.nav_updated = 10.
+        for args in [("nan", "0", "0"), ("0.25", "0.25", "0"),
+                     ("0", "0", "0.26"), ("0", "0"), ("bad", "0", "0")]:
+            command = SimpleNamespace(name="nav_velocity",
+                                      args=args,
+                                      text="invalid")
+            with self.subTest(args=args), self.assertRaises(ValueError):
+                self.runtime._handle_command(command)
+        np.testing.assert_array_equal(self.runtime.nav, np.zeros(3))
+        self.assertEqual(self.runtime.nav_updated, 10.)
+
+    def test_runtime_rejects_commands_during_stop_or_other_states(self):
+        command = SimpleNamespace(name="nav_velocity",
+                                  args=("0.1", "0", "0"),
+                                  text="test")
+        for state, stopping in [("READY", False), ("INFERENCING", False),
+                                ("MOVING", True)]:
+            self.runtime.state = state
+            self.runtime.stop_requested = stopping
+            with self.subTest(state=state,
+                              stopping=stopping), self.assertRaises(ValueError):
+                self.runtime._handle_command(command)

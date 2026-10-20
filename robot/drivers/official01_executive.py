@@ -354,6 +354,30 @@ class ExecutiveProcessClient:
                 f"navigation key requires MOVING; state={self.state}")
         self._write(key)
 
+    def send_nav_velocity(self, forward_mps: float, lateral_mps: float,
+                          yaw_rate_rad_s: float) -> None:
+        """Send bounded body velocity to the integration simulation Executive.
+
+        Translation and turning may coexist. The Executive expires the command
+        using the existing watchdog and remains the sole motion publisher.
+        """
+        values = (forward_mps, lateral_mps, yaw_rate_rad_s)
+        if any(
+                isinstance(value, bool) or not math.isfinite(value)
+                for value in values):
+            raise ExecutiveClientError("navigation velocity must be finite")
+        if (math.hypot(forward_mps, lateral_mps) > self.linear_speed_mps + 1e-9
+                or abs(yaw_rate_rad_s) > self.yaw_rate_rad_s + 1e-9):
+            raise ExecutiveClientError(
+                "navigation velocity exceeds configured limits")
+        if self.runtime != "sim":
+            raise ExecutiveClientError(
+                "continuous navigation is simulation-only")
+        if self.state != "MOVING":
+            raise ExecutiveClientError(
+                f"navigation velocity requires MOVING; state={self.state}")
+        self._write("nav_velocity " + " ".join(repr(float(v)) for v in values))
+
     def stop_moving(self, *, timeout_s: float) -> None:
         if self.state == "READY":
             return

@@ -34,7 +34,11 @@ that limitation instead of silently weakening it.
 ## Phase-Local Parameters
 
 Use one short imperative sentence naming only the active destination and local
-navigation intent, for example `move toward the table with the apple and stop`.
+navigation intent. For a find/approach/grasp mission, preserve the close-approach
+intent, for example `Approach the apple table until it is within arm reach.
+Face the apple.` A vague `move toward the table and stop` can cause an early
+policy stop. This wording is a policy request, not a reachability measurement.
+For a navigation-only mission, retain the user's requested stopping criterion.
 Do not copy the full Mission or include a future grasp/place operation.
 
 | Parameter | Contract |
@@ -54,12 +58,12 @@ default), rather than being preempted immediately.
 execute_robot_action(
     action_type="navigate_vln",
     parameters={
-        "instruction": "move toward the table with the apple and stop",
+        "instruction": "Approach the apple table until it is within arm reach. Face the apple.",
         "max_steps": 120,
         "control_hz": 4.0,
         "max_runtime_s": 120.0,
     },
-    reasoning="The active plan phase is approaching the visible apple table.",
+    reasoning="The active plan phase requires a close approach to the apple table before grasp readiness is assessed.",
 )
 ```
 
@@ -73,7 +77,11 @@ execution evidence (`status`, `reason`, `ticks`, `command_steps`, `elapsed_s`,
 `lightnav_stop`, last waypoint/yaw, and any error). `ROBOT_STATE.md` records the
 navigation state. The standalone driver attempts locomotion IDLE on exit.
 The unified `official01_g1` driver stops locomotion and waits for Executive
-`READY`, retaining arm/hand hold. Neither is proof of semantic arrival; never
+`READY`, retaining arm/hand hold. In the integration simulation, first-waypoint commands
+preserve simultaneous translation and yaw, bounded by the Executive's configured
+speed limits. Commands expire through its existing watchdog; the Agent cannot
+bypass it. A small non-stop waypoint is not treated as a completed phase.
+Neither is proof of semantic arrival; never
 start a second publisher or switch drivers between navigation and manipulation.
 
 | Backend result | Meaning and next step |
@@ -109,10 +117,12 @@ through the native Evaluation Skill:
 delegate_subagent(
     agent_name="task_verification",
     task=(
-        "Verify the active navigation Done Criterion from the current ego view. "
-        "Check whether the intended apple table is identifiable ahead and its "
-        "near edge is visible in the foreground. Report uncertain if the view "
-        "cannot establish a condition; do not estimate metric distance."
+        "Read the active PLAN.md Done Criterion and verify every predicate "
+        "from fresh observations. For a close approach before grasping, report "
+        "target identification, heading and evidence for a suitable standing "
+        "position separately. Seeing the apple or table edge does not establish "
+        "reachability. Report uncertain for conditions the available view "
+        "cannot establish; do not infer metric distance from pixels."
     ),
 )
 ```
@@ -152,8 +162,21 @@ verification; adapt these phases to observations rather than replaying a fixed
 sequence. Send short English phase instructions to the learned policies even
 when the user speaks Chinese; respond to the user in their language.
 
-An approach criterion is not a grasp-readiness criterion. When the target table
-is found, stop and obtain fresh images before refining standing position.
+Separate target discovery, close approach, and grasp readiness in the plan.
+Finding the table does not complete a close-approach subgoal. A visible near edge,
+a centered apple, a LightNav stop, and Executive READY do not establish that the
+robot is close enough to grasp. Pass the full active criterion to verification;
+do not replace it with the weaker question of whether the table is visible.
+READY can support the stopped/controller predicate only. It cannot override an
+uncertain distance, alignment or reachability verdict.
+
+If the policy stops while the fresh view still shows an incomplete approach,
+keep that subgoal active and consider a more explicit close-approach instruction
+within the existing attempt budget. For example, if the table is still ahead
+and fresh observations support a clear approach, use `Move closer to the front
+edge of the table with the apple.` Re-verify the original criterion afterward;
+a changed instruction is not evidence of success. Do not override the model's stop with a
+blind forward command. Obtain fresh images before refining standing position.
 Do not repeatedly drive forward just because the apple is off-center or hidden.
 Check the known scene, table edge, robot heading and visible clearance first.
 

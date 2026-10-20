@@ -145,7 +145,7 @@ class NativeHandoffTest(unittest.TestCase):
                     if not pending.done():
                         pending.cancel()
                         await asyncio.gather(pending, return_exceptions=True)
-            self.assertIn(("key", "w"), driver._client.calls)
+            self.assertIn(("velocity", 0.25, 0.0, 0.0), driver._client.calls)
             self.assertIn(("key", "q"), driver._client.calls)
             queue = action_queue.parse_action_markdown(
                 (workspace / "ACTION.md").read_text())

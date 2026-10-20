@@ -1,7 +1,8 @@
 """Run the external Executive with stable arm targets across navigation phases.
 
 The external implementation is loaded into this private subprocess. No files in
-its checkout are modified. Its parser and control loop remain in charge.
+its checkout are modified. Existing commands and the control loop stay intact;
+a bounded body-velocity command extends the simulation navigation protocol.
 Navigation retains its arm reference and verifies resting arm tracking;
 pose preparation retains the original reference-pose gate.
 """
@@ -9,6 +10,8 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import math
+import shlex
 import sys
 import time
 from pathlib import Path
@@ -27,6 +30,25 @@ class NavigationHoldMixin:
     """
 
     def _handle_command(self, command: Any) -> None:
+        if command.name == "nav_velocity":
+            if self.state != "MOVING" or self.stop_requested:
+                raise self._command_error("navigation velocity requires MOVING")
+            try:
+                velocity = tuple(float(value) for value in command.args)
+                if len(velocity) != 3 or not all(map(math.isfinite, velocity)):
+                    raise ValueError("expected three finite body velocities")
+                if (math.hypot(*velocity[:2])
+                        > self.args.keyboard_slow_linear_speed + 1e-9 or
+                        abs(velocity[2]) > self.args.keyboard_yaw_rate + 1e-9):
+                    raise ValueError(
+                        "navigation velocity exceeds configured limits")
+            except (TypeError, ValueError) as exc:
+                raise self._command_error(str(exc)) from exc
+            self.nav[:] = velocity
+            self.nav_timeout_s = float(self.args.keyboard_slow_duration_s)
+            self.nav_updated = time.monotonic()
+            self.last_nav_command = command.text
+            return
         preserve = command.name == "move_keyboard" and self.state == "READY"
         target = self.arm_hold.copy() if preserve else None
         try:
@@ -108,9 +130,25 @@ def main() -> int:
     sys.modules[spec.name] = runtime
     spec.loader.exec_module(runtime)
 
+    original_parse = runtime.parse_command
+
+    def parse_command(line: str, state: Any = None) -> Any:
+        words = shlex.split(line)
+        if words and words[0] == "nav_velocity":
+            if len(words) != 4:
+                raise runtime.ExecutiveError(
+                    "usage: nav_velocity <vx> <vy> <yaw_rate>")
+            return runtime.OperatorCommand("nav_velocity", tuple(words[1:]),
+                                           line)
+        return original_parse(line, state)
+
+    runtime.parse_command = parse_command
+
     class IntegrationExecutive(NavigationHoldMixin,
                                runtime.Official01Executive):
         """Use the native FSM with a persistent navigation arm hold."""
+
+        _command_error = runtime.ExecutiveError
 
     runtime.Official01Executive = IntegrationExecutive
     sys.argv = [str(path), *remaining]

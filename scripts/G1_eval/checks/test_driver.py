@@ -17,6 +17,9 @@ CONTROL_ROOT = Path("/home/embodied/visionpro_sonic_bridge")
 
 class FakeClient:
 
+    linear_speed_mps = 0.25
+    yaw_rate_rad_s = 0.25
+
     def __init__(self):
         self.state = "READY"
         self.running = True
@@ -39,6 +42,9 @@ class FakeClient:
     def begin_moving(self, *, timeout_s):
         self.calls.append(("begin_moving", timeout_s))
         self.state = "MOVING"
+
+    def send_nav_velocity(self, *values):
+        self.calls.append(("velocity", *values))
 
     def send_nav_key(self, key):
         self.calls.append(("key", key))
