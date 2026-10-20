@@ -117,12 +117,12 @@ through the native Evaluation Skill:
 delegate_subagent(
     agent_name="task_verification",
     task=(
-        "Read the active PLAN.md Done Criterion and verify every predicate "
-        "from fresh observations. For a close approach before grasping, report "
-        "target identification, heading and evidence for a suitable standing "
-        "position separately. Seeing the apple or table edge does not establish "
-        "reachability. Report uncertain for conditions the available view "
-        "cannot establish; do not infer metric distance from pixels."
+        "Assess whether the robot has approached the identified apple table "
+        "closely enough for a bounded simulation grasp attempt, using fresh "
+        "and recent observations. Report visible wrong-target, excessive-gap "
+        "or obstruction evidence. Do not require the apple, front edge and "
+        "floor to be simultaneously visible, or demand certified metric "
+        "reachability. Distinguish approximate trial readiness from success."
     ),
 )
 ```
@@ -162,23 +162,28 @@ verification; adapt these phases to observations rather than replaying a fixed
 sequence. Send short English phase instructions to the learned policies even
 when the user speaks Chinese; respond to the user in their language.
 
-Separate target discovery, close approach, and grasp readiness in the plan.
-Finding the table does not complete a close-approach subgoal. A visible near edge,
-a centered apple, a LightNav stop, and Executive READY do not establish that the
-robot is close enough to grasp. Pass the full active criterion to verification;
-do not replace it with the weaker question of whether the table is visible.
-READY can support the stopped/controller predicate only. It cannot override an
-uncertain distance, alignment or reachability verdict.
+For this simulation, the user accepts an approximately close standing position
+as sufficient to **attempt** grasping. Separate finding the target, standing near
+the table, and bounded grasp execution. Do not create an additional hard gate
+requiring the apple, table front edge and floor/standing space to be visible at
+the same time. A close camera crop often cannot show all three.
 
-If the policy stops while the fresh view still shows an incomplete approach,
-keep that subgoal active and consider a more explicit close-approach instruction
-within the existing attempt budget. For example, if the table is still ahead
-and fresh observations support a clear approach, use `Move closer to the front
-edge of the table with the apple.` Re-verify the original criterion afterward;
-a changed instruction is not evidence of success. Do not override the model's stop with a
-blind forward command. Obtain fresh images before refining standing position.
-Do not repeatedly drive forward just because the apple is off-center or hidden.
-Check the known scene, table edge, robot heading and visible clearance first.
+Once the target apple/table has been identified and the robot has approached the
+table and returned READY, use current and recent observations to judge whether
+a near-table grasp trial is reasonable. This is an approximate readiness decision,
+not a claim of calibrated reachability. Missing metric distance, an invisible
+floor, or an apple temporarily outside the close-up crop does not alone block
+preparation or require moving away again. Prefer the manipulation Skill's
+configured preparation and re-observation before further base corrections when
+the robot is already near the intended table.
+
+If fresh evidence clearly shows the robot is still far from the table, facing a
+wrong target, or physically obstructed, keep the approach active and plan a
+bounded correction. Otherwise proceed to preparation and a short grasp window;
+verify the actual grasp afterward. READY establishes the control state, not
+semantic success. A policy stop without supporting scene context is insufficient.
+Do not force motion after model STOP or repeatedly retreat solely to make the
+table edge and floor reappear. Honor the existing action and recovery budgets.
 
 Only the unified driver supports `move_micro`. Use `execute_robot_action` with
 `action_type="move_micro"` and `parameters={"direction": "turn_left",
@@ -196,11 +201,12 @@ no-progress recovery rules. If the initial approach is achieved, a separately
 planned grasp-alignment subgoal may have its own five-attempt budget; this must
 not disguise an unsuccessful approach.
 
-Let the manipulation Skill define required reachability and preparation.
-If it finds the base pose unsuitable, keep grasping pending and correct the
-standing position through this Skill. After any base motion, invalidate prior
+Let the manipulation Skill perform the configured preparation and a bounded
+trial from an approximately close pose. If preparation or an actual grasp trial
+provides evidence that the base pose is unsuitable, correct the standing position
+through this Skill. After any base motion, invalidate prior
 readiness conclusions and re-observe; after an arm preparation changes the view,
-recheck the target. Never use an arm reset/preparation while carrying an object.
+recheck the target without reinstating the simultaneous-visibility gate. Never use an arm reset/preparation while carrying an object.
 
 
 ## Control Failure Is Not a Motion-Recovery Request

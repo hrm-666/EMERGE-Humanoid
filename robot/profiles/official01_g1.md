@@ -28,10 +28,14 @@ rejection, or inability to return READY as failures.
 
 ## Known limitations
 
-- Navigation stop or budget exhaustion is not evidence of an accurate grasp pose.
-  A visible table edge or centered apple is also insufficient. Preserve the full
-  close-approach/readiness criterion when requesting visual verification; READY
-  cannot override uncertainty about reachability or alignment.
+- Navigation stop or budget exhaustion does not certify an accurate grasp pose.
+  For this simulation, an approximately close, stopped pose at the identified
+  apple table is sufficient to attempt preparation and a short grasp window.
+  Do not require simultaneous apple/table-edge/floor visibility or calibrated
+  reachability; use current and recent target context. Do not retreat solely
+  because a close-up hides the floor or apple. Verify grasp success afterward.
+  Concrete wrong-target/obstruction evidence and control failures still block
+  the attempt. READY alone does not prove either proximity or grasp success.
 - Simulation navigation preserves simultaneous bounded body translation and yaw
   through the single Executive and its command watchdog. Continuous navigation
   has not been enabled for real hardware.

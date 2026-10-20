@@ -386,3 +386,24 @@ There is no demonstrated reliable close-range stopping/readiness gate yet. Next
 acceptance requires an observable, calibrated grasp-start envelope, comparison
 against known-good GR00T starts in this room, and autonomous UI verification of
 approach/recovery without the evaluation boundary supplying task completion.
+
+
+### UI feedback: approximate near-table grasp trial (2026-10-20)
+
+Run `2c8b8421cbaa4328b69c45a6fccb9136` used real Astra high and the fixed adapter.
+The Agent navigated from base x=-0.200 m to x=1.187 m, then to x=1.612 m; both
+navigation actions ended on policy STOP and returned READY. It then demanded
+simultaneous apple/table-front/floor visibility and retreated instead of trying
+preparation. The user judged the near-table pose suitable for a trial from the
+MuJoCo view, rejected that overly strict visual gate, and requested cancellation
+and a fresh UI run. Cancellation was acknowledged and both videos finalized.
+
+The navigation/manipulation Skills and embodiment now record the user's intended
+simulation contract: approximately close and stopped at the identified target
+is sufficient to attempt the configured preparation and a bounded GR00T window.
+Recent target context is retained when the apple temporarily leaves a close-up
+crop. Metric reachability and simultaneous apple/edge/floor visibility are not
+preconditions. Missing those alone must not trigger retreat. This changes trial
+eligibility, not success reporting: actual held-and-lifted evidence is still
+required. Fresh inputs, empty-hand preparation, successful pose gates, READY,
+and checks for concrete obstruction/wrong-target evidence remain in force.

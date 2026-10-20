@@ -18,31 +18,38 @@ Use native planning and visual verification; the user should give only the task,
 in Chinese or English. Translate the current policy subgoal into concise English
 without adding unrequested tasks such as placing the apple in a drawer.
 
-Before inference, require current observation and Executive `READY`. Check:
+For this simulation, the user explicitly accepts an approximately close pose
+for a bounded grasp trial. Do not require certified reachability or simultaneous
+visibility of the apple, table front edge and standing floor before preparation.
 
-- The intended apple and relevant table surface are identifiable.
-- The robot is stopped; the standing position and heading are compatible with
-  the active policy's documented training/start conditions and visible clearance.
-- The configured preparation has completed and the target remains visible after
-  the camera view changes. A centered apple alone does not establish reachability.
-- The hand is not already holding an object that preparation would release.
+Before preparation/inference, require fresh observations and Executive READY.
+Use current and recent observations to establish the intended apple/table and
+an approximately close, stopped base pose. Check for visible wrong-target or
+obstruction evidence and whether the hands already hold an object. Known empty
+hands in the fresh simulation or recent hand-state evidence may establish the
+empty-hand precondition; a camera view of both hands is not mandatory.
 
-Use the native `task_verification` specialist for visual criteria. Distinguish
-visible evidence from calibrated reachability: RGB alone cannot certify metric
+If the robot has approached the identified table and stopped nearby, proceed
+with the configured arm/body preparation, then refresh the image and attempt one
+short GR00T window. Missing metric distance or an out-of-frame table edge/floor
+is not a veto. An apple temporarily outside a close-up crop does not alone
+require retreat: retain its recent grounded table context and re-observe after
+preparation. If that context remains consistent and there is no concrete evidence
+against the attempt, a bounded simulation grasp trial is allowed even though
+precise reachability has not been certified. Report that uncertainty honestly;
+only post-action verification can establish grasp success.
+
+Use `task_verification` to assess task effects and concrete visual issues, not
+to invent a stricter pre-grasp geometry gate. RGB alone does not certify metric
 reach, contact force or grasp stability. Do not invoke LIBERO-specific geometry
-or invent a world pose. If the initial conditions cannot be established, report
-uncertainty or request a supported standing-position correction rather than
-claiming readiness from a successful action status.
-
-Carry the full readiness criterion into the verification request. A verifier's
-uncertain reach/alignment verdict stays uncertain even when the Controller is
-READY. READY establishes the control state, not the object's reachability.
-If navigation merely found the table, keep the incomplete approach active;
-do not use a grasp window to compensate for missing approach evidence.
+or invent a world pose. Stale/missing input, a wrong target, an unresolved control
+failure, or clear physical obstruction still requires stopping or correction.
 
 Body translation/heading corrections belong to navigation (`move_micro`).
-Hand/arm preparation belongs here (`run_fixed_action`). After a correction,
-re-observe and re-evaluate the same readiness criterion before inference.
+Hand/arm preparation belongs here (`run_fixed_action`). Do not repeatedly move
+away from an already close table merely to recover a wide view of the floor.
+After a correction, re-observe before inference, without demanding calibrated
+proof or simultaneous apple/edge/floor visibility.
 
 ## Preparation
 
