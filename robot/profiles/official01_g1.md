@@ -28,14 +28,32 @@ rejection, or inability to return READY as failures.
 
 ## Known limitations
 
-- Navigation stop or budget exhaustion does not certify an accurate grasp pose.
-  For this simulation, an approximately close, stopped pose at the identified
-  apple table is sufficient to attempt preparation and a short grasp window.
-  Do not require simultaneous apple/table-edge/floor visibility or calibrated
-  reachability; use current and recent target context. Do not retreat solely
-  because a close-up hides the floor or apple. Verify grasp success afterward.
-  Concrete wrong-target/obstruction evidence and control failures still block
-  the attempt. READY alone does not prove either proximity or grasp success.
+When `station_docking.mode` is `simulation_docking_only` or
+`simulation_docking_and_grasp`, read `sim-station-docking`. The additional action
+is `dock_to_station` with only `{"station": "apple_table_front"}`. LightNav reaches
+the entry region; docking uses simulation robot pose through the same Executive.
+Only its measured `docked` result establishes arrival. In docking-only mode,
+report and stop. In docking-and-grasp mode, successful docking permits preparation
+and grasp, with fresh pose checks before each action. Navigation invalidates
+that handoff. The Driver enforces at most two total micro corrections per run.
+Robot world coordinates stay inside the execution layer; object ground truth
+remains evaluation-only. Docking does not itself prove reach or grasp success.
+
+- Navigation stop or budget exhaustion does not certify close approach or a
+  grasp pose. Require positive current/recent visual evidence of being at the
+  identified table, not just target visibility, apple image centering or absence
+  of obstacles. Complete a remaining approach gap through navigation before
+  GR00T. Do not use GR00T's body motion to finish an incomplete approach.
+  Once close, approximate alignment permits preparation and a short grasp trial;
+  do not demand simultaneous apple/edge/floor visibility or calibrated reach.
+  Do not retreat solely because a close-up hides the floor or apple.
+- Allow at most two near-table micro corrections for the same acquisition,
+  including failed-grasp recovery; use 0.25–0.5 s pulses with observation after
+  each. Prefer reserving one for an observed miss. Do not reset this allowance
+  through replanning. Diagnose the first failed grasp; correct a supported
+  geometric error before retrying instead of changing only the text instruction.
+  In docking-and-grasp mode the Driver additionally enforces the two-correction budget. Verify actual
+  held-and-lifted evidence for grasp success; READY is only a control state.
 - Simulation navigation preserves simultaneous bounded body translation and yaw
   through the single Executive and its command watchdog. Continuous navigation
   has not been enabled for real hardware.

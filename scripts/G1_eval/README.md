@@ -121,6 +121,13 @@ per-action limits. These budgets do not guarantee success.
 
 ## Acceptance and diagnostics
 
+The optional simulation station-docking milestone is described in
+[`STATION_DOCKING.md`](STATION_DOCKING.md). It introduces a measured final
+approach after LightNav. The optional docking config currently enables a trial
+apple-table station and permits the preparation/grasp handoff only after measured
+docking. The general-purpose `dev/official01_g1_sim.json` config does not enable
+station docking.
+
 Check in increasing scope:
 
 1. Room RGB + yaw arrive fresh; SONIC and Executive become ready.

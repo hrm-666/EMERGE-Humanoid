@@ -24,6 +24,9 @@ from robot.navigation.lightnav_sonic.navigation_backend import NavigationConfig
 from robot.navigation.lightnav_sonic.observation_writer import (
     EgoObservationWriter,
 )
+from robot.navigation.lightnav_sonic.sim_docking_pose import SimDockingPoseSource
+from robot.navigation.lightnav_sonic.station_docking import StationDockingRunner
+from robot.navigation.lightnav_sonic.station_docking import StationRegistry
 
 
 class Official01G1Driver(BaseDriver):
@@ -62,12 +65,21 @@ class Official01G1Driver(BaseDriver):
         publish_observations: bool = True,
         lock_file: str | Path = "/tmp/emerge_official01_g1.lock",
         profile_path: str | Path | None = None,
+        docking_config_path: str | Path | None = None,
         **_kwargs: Any,
     ) -> None:
         del gui
         self.workspace = Path(workspace).expanduser().resolve()
         self.control_root = Path(control_root).expanduser().resolve()
         self.runtime = runtime
+        self._docking_registry = (StationRegistry(docking_config_path, runtime)
+                                  if docking_config_path is not None else None)
+        self._verified_station: str | None = None
+        self._micro_corrections = 0
+        self._docking_state: dict[str, Any] = {
+            "status": "not_docked",
+            "grasp_ready": False,
+        }
         own_dir = Path(__file__).resolve().parents[1] / "profiles"
         selected_profile = Path(profile_path).expanduser(
         ) if profile_path else own_dir / "official01_g1.md"
@@ -319,13 +331,30 @@ class Official01G1Driver(BaseDriver):
                     "executive_not_ready",
                     executive_state=self._require_client().state,
                 )
+            elif (self._docking_registry is not None and action_type
+                  in {"infer_gr00t", "run_fixed_action", "move_micro"} and
+                  (guard_reason := self._manipulation_guard(action_type))):
+                result = self._json_result(
+                    "failed",
+                    "rejected",
+                    guard_reason,
+                    grasp_ready=False,
+                )
+            elif action_type == "dock_to_station":
+                result = self._dock_to_station(params, cancel_check)
             elif action_type == "navigate":
+                self._verified_station = None
+                self._docking_state = {
+                    "status": "invalidated_by_navigation",
+                    "grasp_ready": False
+                }
                 result = self._navigate(params, cancel_check)
             elif action_type == "infer_gr00t":
                 result = self._infer(params, cancel_check)
             elif action_type == "run_fixed_action":
                 result = self._run_fixed(params)
             elif action_type == "move_micro":
+                self._micro_corrections += 1
                 result = self._move_micro(params, cancel_check)
             else:
                 result = self._json_result("failed", "rejected",
@@ -342,6 +371,72 @@ class Official01G1Driver(BaseDriver):
             "cancelled" if result.startswith("Cancelled:") else "completed")
         self._last_action.update(status=status, result=result)
         return result
+
+    def _manipulation_guard(self, action_type: str) -> str | None:
+        """Require measured docking and a fresh near-table pose for handoff."""
+        if self._docking_registry.docking_only:
+            return "docking_only_stage"
+        if self._verified_station is None:
+            return "measured_docking_required"
+        if action_type == "move_micro" and self._micro_corrections >= 2:
+            return "micro_correction_budget_exhausted"
+        station = self._docking_registry.get(self._verified_station)
+        source = SimDockingPoseSource(self._navigation_base["camera_endpoint"])
+        try:
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                pose = source.latest(station.max_pose_age_s)
+                if pose is not None:
+                    fault = station.pose_fault(pose)
+                    if fault:
+                        return fault
+                    position_error, _ = station.errors(pose)
+                    if position_error > (station.settled_position_tolerance_m or
+                                         station.position_tolerance_m):
+                        return "station_position_changed_reobserve_and_redock"
+                    return None
+                time.sleep(0.05)
+            return "fresh_station_pose_required"
+        finally:
+            source.close()
+
+    def _make_docking(self) -> StationDockingRunner:
+        return StationDockingRunner(self._require_client(),
+                                    self._navigation_base["camera_endpoint"])
+
+    def _dock_to_station(self, params: dict[str, Any],
+                         cancel_check: CancelCheck | None) -> str:
+        self._verified_station = None
+        self._docking_state = {"status": "not_docked", "grasp_ready": False}
+        if self.runtime != "sim" or self._docking_registry is None:
+            raise ValueError("simulation station docking is not configured")
+        if set(params) != {"station"}:
+            raise ValueError("dock_to_station accepts only a station name")
+        station = self._docking_registry.get(params["station"])
+        docking = self._make_docking().run(
+            station,
+            cancel_check=cancel_check,
+            state_callback=self._receive_navigation_state)
+        evidence = docking.to_dict()
+        if evidence["status"] == "docked":
+            self._verified_station = station.name
+        manipulation_allowed = (self._verified_station is not None and
+                                not self._docking_registry.docking_only)
+        evidence["manipulation_allowed"] = manipulation_allowed
+        self._docking_state = {
+            "status": "historical_result",
+            "last_result": deepcopy(evidence),
+            "grasp_ready": False,
+            "manipulation_allowed": manipulation_allowed,
+        }
+        status = evidence.pop("status")
+        reason = evidence.pop("reason")
+        return self._json_result(
+            "completed" if status == "docked" else status,
+            "docked" if status == "docked" else "docking_not_verified",
+            reason,
+            executive_state=self._require_client().state,
+            **evidence)
 
     def _navigate(self, params: dict[str, Any],
                   cancel_check: CancelCheck | None) -> str:
@@ -582,6 +677,13 @@ class Official01G1Driver(BaseDriver):
                     "control_owner": "official01_g1",
                     "observation_state": deepcopy(self._observation_state),
                     "last_action": deepcopy(self._last_action),
+                    "station_docking": {
+                        **(self._docking_registry.public_status() if self._docking_registry else {
+                               "mode": "disabled"
+                           }),
+                        **deepcopy(self._docking_state),
+                        "micro_corrections_remaining": max(0, 2 - self._micro_corrections),
+                    },
                     "safety": {
                         "single_owner_lock":
                             str(self._lock_path),
@@ -597,6 +699,7 @@ class Official01G1Driver(BaseDriver):
         }
 
     def close(self) -> None:
+        self._docking_state = {"status": "closed", "grasp_ready": False}
         self._observation_stop.set()
         if self._observation_thread is not None:
             self._observation_thread.join(timeout=2.0)

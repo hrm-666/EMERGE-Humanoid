@@ -176,7 +176,7 @@
     },
     {
       "path": "integrations/inspire_mujoco/p5_sim_observation_server.py",
-      "sha256": "a6acebf0c3bd5e0ce79e631035e599ae57b09303e5d089f8bfdaa50d25328d59"
+      "sha256": "13e6a7c48e8b1d00caf16d241a40a877981da8be703af94dfc7a39757341d3a2"
     },
     {
       "path": "integrations/inspire_mujoco/official01_sim_observation_audit.py",
@@ -308,7 +308,7 @@
     },
     {
       "path": "integrations/inspire_mujoco/objects/apple_room.xml",
-      "sha256": "dbb4ae2b90c6a17784b2e0a9083ffa83df081ce90d2b7630692f11744ccd7b54"
+      "sha256": "ba20ad8e979ac5dea9df63b142bdf5a4d1b6a1302a68fdd8114f8995a35c0f2c"
     },
     {
       "path": "integrations/inspire_mujoco/objects/cabinet_drawer.xml",

@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "runtime": "sim",
+  "docking_only": false,
+  "stations": {
+    "apple_table_front": {
+      "enabled": true,
+      "calibration_status": "trial",
+      "notes": "User selected d=0.15 m after static collision check rejected d=0.05 m. Provisional commissioning corridor; dynamic and grasp acceptance pending. User accepted approximately 5.5 cm / 3.2 deg resting error on 2026-10-21; resting acceptance is 6 cm / 0.07 rad, with the original corridor unchanged. User prioritizes practical grasp-ready arrival over precise pose: approach 4 cm / 0.10 rad; rest 8 cm / 0.12 rad, same corridor.",
+      "entry": {
+        "xmin": 0.55,
+        "xmax": 1.3,
+        "ymin": -0.25,
+        "ymax": 0.25
+      },
+      "corridor": {
+        "xmin": 0.45,
+        "xmax": 1.569,
+        "ymin": -0.3,
+        "ymax": 0.3
+      },
+      "target_x": 1.529,
+      "target_y": 0.0,
+      "target_yaw": 0.0,
+      "position_tolerance_m": 0.04,
+      "yaw_tolerance_rad": 0.1,
+      "entry_yaw_tolerance_rad": 0.7,
+      "max_speed_mps": 0.25,
+      "max_yaw_rate_rad_s": 0.12,
+      "max_runtime_s": 60.0,
+      "max_path_m": 1.3,
+      "position_gain": 1.0,
+      "settled_position_tolerance_m": 0.08,
+      "settled_yaw_tolerance_rad": 0.12
+    }
+  }
+}

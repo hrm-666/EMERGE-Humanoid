@@ -11,6 +11,16 @@ the active Controller owns dispatch, cancellation, and the planner publisher.
 
 ## Preconditions and Grounding
 
+For `official01_g1` with `station_docking.mode` equal to
+`simulation_docking_only` or `simulation_docking_and_grasp`, read
+`sim-station-docking`. LightNav finds the apple table and reaches the approach
+region; then call `dock_to_station` to finish the approach. STOP and visual
+verification cannot replace measured docking. In docking-only mode, end after
+docking. In docking-and-grasp mode, continue with preparation and grasp after
+`docked`; do not continue navigating closer after that measured success.
+After LightNav ends, call dock_to_station as the next robot action. Do not require a second visual close-approach verdict before the measured docking attempt. The Agent receives no world coordinates. A disabled station is not permission
+to fall back to a qualitative close-table judgment.
+
 Read `EMBODIED.md`, `ROBOT_STATE.md`, and the current `PLAN.md`. Use this Skill
 only when the active embodiment is `lightnav_sonic_g1` or `official01_g1`
 and lists `navigate_vln` (the unified driver also accepts `navigate`).
@@ -35,8 +45,8 @@ that limitation instead of silently weakening it.
 
 Use one short imperative sentence naming only the active destination and local
 navigation intent. For a find/approach/grasp mission, preserve the close-approach
-intent, for example `Approach the apple table until it is within arm reach.
-Face the apple.` A vague `move toward the table and stop` can cause an early
+intent from the first call, for example `Walk up to the front edge of the
+table with the apple and stop close enough to reach the apple.` A vague `move toward the table and stop` can cause an early
 policy stop. This wording is a policy request, not a reachability measurement.
 For a navigation-only mission, retain the user's requested stopping criterion.
 Do not copy the full Mission or include a future grasp/place operation.
@@ -58,7 +68,7 @@ default), rather than being preempted immediately.
 execute_robot_action(
     action_type="navigate_vln",
     parameters={
-        "instruction": "Approach the apple table until it is within arm reach. Face the apple.",
+        "instruction": "Walk up to the front edge of the table with the apple and stop close enough to reach the apple.",
         "max_steps": 120,
         "control_hz": 4.0,
         "max_runtime_s": 120.0,
@@ -117,12 +127,15 @@ through the native Evaluation Skill:
 delegate_subagent(
     agent_name="task_verification",
     task=(
-        "Assess whether the robot has approached the identified apple table "
-        "closely enough for a bounded simulation grasp attempt, using fresh "
-        "and recent observations. Report visible wrong-target, excessive-gap "
-        "or obstruction evidence. Do not require the apple, front edge and "
-        "floor to be simultaneously visible, or demand certified metric "
-        "reachability. Distinguish approximate trial readiness from success."
+        "Assess close approach to the identified apple table, separately from "
+        "target recognition. Cite positive visual evidence that the robot is "
+        "at the table, rather than merely facing it across a remaining gap. "
+        "Use the current view: report a visible approach gap as "
+        "not_achieved; insufficient proximity evidence as uncertain. STOP, "
+        "READY, apple image centering and absence of obstacles are not proof "
+        "of proximity. Do not demand simultaneous apple/edge/floor visibility "
+        "or invent metric distances. Describe visible apple/right-hand "
+        "alignment separately; grasp success is a later criterion."
     ),
 )
 ```
@@ -162,51 +175,77 @@ verification; adapt these phases to observations rather than replaying a fixed
 sequence. Send short English phase instructions to the learned policies even
 when the user speaks Chinese; respond to the user in their language.
 
-For this simulation, the user accepts an approximately close standing position
-as sufficient to **attempt** grasping. Separate finding the target, standing near
-the table, and bounded grasp execution. Do not create an additional hard gate
-requiring the apple, table front edge and floor/standing space to be visible at
-the same time. A close camera crop often cannot show all three.
+### Close approach before preparation
 
-Once the target apple/table has been identified and the robot has approached the
-table and returned READY, use current and recent observations to judge whether
-a near-table grasp trial is reasonable. This is an approximate readiness decision,
-not a claim of calibrated reachability. Missing metric distance, an invisible
-floor, or an apple temporarily outside the close-up crop does not alone block
-preparation or require moving away again. Prefer the manipulation Skill's
-configured preparation and re-observation before further base corrections when
-the robot is already near the intended table.
+Separate **target found**, **close approach**, and **grasp alignment**. Finding
+the apple, centering it in the image, a policy STOP, and READY do not establish
+close approach. Before advancing the approach subgoal, cite positive evidence
+from current/recent ego observations that the base is at the intended table:
+for example, the previously visible approach gap has closed and the near table
+boundary is immediately ahead in the image sequence. Explain the actual cues;
+do not infer proximity just because no obstacle or contradiction was reported.
+These are qualitative trial-readiness cues, not calibrated reach measurements.
+The task verifier sees current camera images only. The Main Agent may compare
+its previous grounded reports with the new report; do not ask the verifier to
+see an unavailable image history or to choose a robot action.
+Do not require the apple, table edge and floor to appear simultaneously. A
+close-up crop alone neither establishes nor disproves proximity; keep recent
+target context when the apple or floor leaves the image.
 
-If fresh evidence clearly shows the robot is still far from the table, facing a
-wrong target, or physically obstructed, keep the approach active and plan a
-bounded correction. Otherwise proceed to preparation and a short grasp window;
-verify the actual grasp afterward. READY establishes the control state, not
-semantic success. A policy stop without supporting scene context is insufficient.
-Do not force motion after model STOP or repeatedly retreat solely to make the
-table edge and floor reappear. Honor the existing action and recovery budgets.
+Make the first LightNav request explicitly seek the front edge and a close
+stop. Honor its STOP, then verify. If a substantial approach gap remains, keep
+the same approach subgoal active and request a bounded local close approach,
+such as `Move closer to the front edge of the table with the apple.` Verify
+again before preparation. This is a new, evidence-grounded action, not ignoring
+STOP or blindly appending forward motion. Prefer one such local completion;
+if it also stops far away without useful progress, reassess and report the
+unresolved approach rather than letting GR00T walk the missing distance. Do not
+claim one model call is guaranteed to produce a grasp-ready stop.
+
+On insufficient proximity evidence, request a fresh observation and explain the
+uncertainty. Do not silently advance to grasp, invent a metric distance, or
+retreat merely to recover a wide floor view. Once close approach is supported,
+do not keep calling long LightNav actions to optimize a cosmetic camera view.
+Proceed to preparation, with a small correction only for a concrete alignment
+error. Do not require a perfect pose before the first bounded grasp trial.
+
+### At most two small near-table corrections
+
+For the same apple-table acquisition, allow **at most two `move_micro` actions
+in total**, including pre-grasp alignment and corrections after failed grasps.
+Prefer zero or one before the first grasp, retaining one for an observed miss.
+Count from ACTION.md across turns, branches and replans; a renamed alignment
+subgoal does not reset the allowance. These actions also count toward the
+existing five navigation-action budget for this acquisition. This is an Agent
+instruction budget, not a Driver-enforced displacement/count limit.
 
 Only the unified driver supports `move_micro`. Use `execute_robot_action` with
 `action_type="move_micro"` and `parameters={"direction": "turn_left",
 "duration_s": 0.5, "timeout_s": 15}` for one grounded correction. Supported
-`direction` values are `forward`, `backward`, `left`, `right`, `turn_left`,
-`turn_right`. Default to 0.25–0.5 s pulses; never exceed the configured 2 s ceiling.
-Refresh observation after every pulse. Returned commanded distance and angle
-are command integrals, not measured displacement or guaranteed physical bounds. Do not infer clearance in occluded
-space or use uncalibrated image pixels as metric distances.
+directions are `forward`, `backward`, `left`, `right`, `turn_left`, `turn_right`.
+Use a 0.25–0.5 s pulse for near-table alignment; do not use the general 2 s
+Driver ceiling here, chain pulses without observation, or replace a needed
+close approach with a long blind micro-motion. At the current 0.25 m/s and
+0.25 rad/s settings, these pulses command approximately 6–12.5 cm or 3.6–7.2
+degrees. These are command integrals, **not measured displacement or physical
+bounds**: gait startup and stopping dynamics can produce different motion.
 
-Count these dispatched corrections with navigation actions toward the existing
-five-attempt limit for the same standing-position subgoal. Do not evade this
-limit by renaming or replanning the goal. Use early stopping and the existing
-no-progress recovery rules. If the initial approach is achieved, a separately
-planned grasp-alignment subgoal may have its own five-attempt budget; this must
-not disguise an unsuccessful approach.
+Choose one error to correct, cite the evidence and predict its visual effect.
+Use a small turn for a supported heading mismatch, lateral motion for a
+supported sideways offset, and forward motion only for a small remaining reach
+gap with visible clearance. Image centering alone is not right-hand alignment;
+consider the apple relative to the prepared right-hand approach. If the direction
+cannot be grounded, do not guess from an occluded apple. Re-observe after each
+pulse and compare the predicted effect before using the remaining allowance.
 
-Let the manipulation Skill perform the configured preparation and a bounded
-trial from an approximately close pose. If preparation or an actual grasp trial
-provides evidence that the base pose is unsuitable, correct the standing position
-through this Skill. After any base motion, invalidate prior
-readiness conclusions and re-observe; after an arm preparation changes the view,
-recheck the target without reinstating the simultaneous-visibility gate. Never use an arm reset/preparation while carrying an object.
+Require READY and confirmed empty hands before a post-grasp base correction.
+Do not move the base when the hand may be holding the apple or is engaged with
+the table. Let `gr00t-manipulation` choose the supported empty-hand pose reset
+when needed. After any base motion, invalidate prior readiness conclusions and
+re-observe. After preparation changes the view, recheck target context without
+reinstating the simultaneous-visibility gate. Never reset arms while carrying.
+When the correction allowance is exhausted, do not disguise another correction
+as a new LightNav/GR00T instruction; report the remaining alignment limitation.
 
 
 ## Control Failure Is Not a Motion-Recovery Request

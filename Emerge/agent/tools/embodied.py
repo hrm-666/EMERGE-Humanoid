@@ -49,6 +49,7 @@ class EmbodiedActionTool(Tool):
             "Use vla_execute for the current visually sensitive contact phase; in a multi-step plan its instruction must describe only the current subgoal, not the complete mission. "
             "Use navigate or navigate_vln only when the active EMBODIED.md profile supports navigation; "
             "use infer_gr00t, run_fixed_action, and move_micro only when the active G1 profile lists them. "
+            "Use dock_to_station only for a configured simulation station; its measured result is required for arrival. "
             "give one current navigation subgoal and verify arrival after execution. "
             "Every tool call MUST include a non-empty `parameters` object. "
             "Do not call this tool with only `action_type` and `reasoning`.")
@@ -70,6 +71,7 @@ class EmbodiedActionTool(Tool):
                         "- 'vla_execute': Execute the current phase's natural language instruction using the VLA policy\n"
                         "- 'navigate': Execute bounded LightNav navigation through the active G1 executive\n"
                         "- 'navigate_vln': Backward-compatible LightNav navigation action\n"
+                        "- 'dock_to_station': Finish a configured simulation station approach and verify measured rest\n"
                         "- 'infer_gr00t': Run one bounded GR00T instruction, then return to READY\n"
                         "- 'run_fixed_action': Run an allow-listed pose, trajectory, or preparation\n"
                         "- 'move_micro': Run one bounded body-relative translation or turn"
@@ -89,6 +91,7 @@ class EmbodiedActionTool(Tool):
                         "- follow_arc: {center: [x,y,z], axis: [x,y,z], radius_m: 0.1, angle_deg: 90}\n"
                         "- vla_execute: {instruction: 'pick up the red block', step: 40}\n"
                         "- navigate: {instruction: 'move next to the table and stop', max_steps: 120, control_hz: 4, max_runtime_s: 120}\n"
+                        "- dock_to_station: {station: 'apple_table_front'}; no coordinate or budget overrides\n"
                         "- infer_gr00t: {instruction: 'pick up the apple', duration_s: 10, timeout_s: 30}\n"
                         "- run_fixed_action: {kind: 'pose', name: 'pick_ready_r', timeout_s: 30}\n"
                         "- move_micro: {direction: 'forward', duration_s: 0.5, timeout_s: 15}\n"
@@ -151,11 +154,15 @@ class EmbodiedActionTool(Tool):
             action_id=action_id,
             dispatch_message=dispatch_message,
             timeout_s=self._result_timeout(action_type, parameters),
+            allow_visual_completion=action_type != "dock_to_station",
         )
 
     @staticmethod
     def _result_timeout(action_type: str, parameters: dict[str, Any]) -> float:
         """Backstop wait budget, scaled by the action's step count."""
+        if action_type == "dock_to_station":
+            # Station runtime is capped at 120 s, plus stop and queue grace.
+            return 150.0
         if action_type in {"navigate", "navigate_vln"}:
             try:
                 runtime = float(parameters.get("max_runtime_s", 120.0))
@@ -210,6 +217,7 @@ class EmbodiedActionTool(Tool):
         dispatch_message: str,
         timeout_s: float = _BASE_RESULT_TIMEOUT_S,
         poll_interval_s: float = 0.5,
+        allow_visual_completion: bool = True,
     ) -> str:
         result_task = asyncio.create_task(
             self._poll_action_result(
@@ -219,7 +227,7 @@ class EmbodiedActionTool(Tool):
                 timeout_s=timeout_s,
                 poll_interval_s=poll_interval_s,
             ))
-        if self.visual_interrupts is None:
+        if self.visual_interrupts is None or not allow_visual_completion:
             return await result_task
 
         interrupt_task = asyncio.create_task(
