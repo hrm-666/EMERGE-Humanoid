@@ -483,6 +483,10 @@ def _feedback_message(status: dict[str, Any], *, task_instruction: str) -> str:
 
 
 def _agent_runtime_config(args: argparse.Namespace):
+    from Emerge.config.loader import get_config_path
+
+    # Keep preflight and the later per-episode workspace on the same config file.
+    args.agent_config = (args.agent_config or get_config_path()).expanduser().resolve()
     request = {
         "message": "provider preflight",
         "config": (
@@ -514,35 +518,7 @@ def _validate_agent_provider(args: argparse.Namespace, config=None) -> str:
         )
     config = config or _agent_runtime_config(args)
     create_provider(config, model=args.agent_model)
-    selected_model = str(args.agent_model or config.agents.defaults.model)
-    if selected_model.startswith("openai-codex/"):
-        import tomllib
-
-        codex_root = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
-        model_cache = codex_root / "models_cache.json"
-        try:
-            cache = json.loads(model_cache.read_text(encoding="utf-8"))
-            available = {
-                str(item["slug"])
-                for item in cache.get("models", [])
-                if isinstance(item, dict) and item.get("slug")
-            }
-        except (FileNotFoundError, json.JSONDecodeError, OSError, AttributeError):
-            available = set()
-        try:
-            codex_config = tomllib.loads((codex_root / "config.toml").read_text(encoding="utf-8"))
-            configured_model = codex_config.get("model")
-            if configured_model:
-                available.add(str(configured_model))
-        except (FileNotFoundError, OSError, tomllib.TOMLDecodeError):
-            pass
-        model_slug = selected_model.split("/", 1)[1]
-        if available and model_slug not in available:
-            raise ValueError(
-                f"Codex OAuth model {model_slug!r} is not available for this account. "
-                f"Cached available models: {', '.join(sorted(available))}"
-            )
-    return selected_model
+    return str(args.agent_model or config.agents.defaults.model)
 
 
 def _validate_behavior_perception(config, *, required: bool = True) -> str:

@@ -22,6 +22,7 @@ WORKSPACE_ROOT = EMERGE_ROOT.parent
 if str(EMERGE_ROOT) not in sys.path:
     sys.path.insert(0, str(EMERGE_ROOT))
 
+from Emerge.config.loader import get_config_path  # noqa: E402
 from Emerge.runtime.protocol import RunRequest  # noqa: E402
 from Emerge.runtime.service import AgentRuntime, build_agent  # noqa: E402
 from scripts.Behavior_eval.eval_behavior_agent import _evaluator_command  # noqa: E402
@@ -71,7 +72,7 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task-name", default="turning_on_radio")
     parser.add_argument("--instance-index", type=int, default=0)
-    parser.add_argument("--agent-config", type=Path)
+    parser.add_argument("--agent-config", type=Path, default=get_config_path())
     parser.add_argument("--agent-model", default="gpt-6.1-sol")
     parser.add_argument("--agent-max-iterations", type=int, default=80)
     parser.add_argument("--agent-timeout", type=float, default=7200)

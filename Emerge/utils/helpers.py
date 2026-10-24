@@ -64,6 +64,7 @@ def build_assistant_message(
     tool_calls: list[dict[str, Any]] | None = None,
     reasoning_content: str | None = None,
     thinking_blocks: list[dict] | None = None,
+    native_items: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Build a provider-safe assistant message with optional reasoning fields."""
     msg: dict[str, Any] = {"role": "assistant", "content": content}
@@ -73,6 +74,8 @@ def build_assistant_message(
         msg["reasoning_content"] = reasoning_content
     if thinking_blocks:
         msg["thinking_blocks"] = thinking_blocks
+    if native_items:
+        msg["native_items"] = native_items
     return msg
 
 
@@ -80,31 +83,23 @@ def estimate_prompt_tokens(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None = None,
 ) -> int:
-    """Estimate prompt tokens with tiktoken."""
+    """Estimate text/tool tokens plus a budgeting allowance for each image."""
+    estimated = sum(estimate_message_tokens(message) for message in messages)
+    if not tools:
+        return estimated
+    payload = json.dumps(tools, ensure_ascii=False)
     try:
         enc = tiktoken.get_encoding("cl100k_base")
-        parts: list[str] = []
-        for msg in messages:
-            content = msg.get("content")
-            if isinstance(content, str):
-                parts.append(content)
-            elif isinstance(content, list):
-                for part in content:
-                    if isinstance(part, dict) and part.get("type") == "text":
-                        txt = part.get("text", "")
-                        if txt:
-                            parts.append(txt)
-        if tools:
-            parts.append(json.dumps(tools, ensure_ascii=False))
-        return len(enc.encode("\n".join(parts)))
+        return estimated + len(enc.encode(payload))
     except Exception:
-        return 0
+        return estimated + len(payload) // 4
 
 
 def estimate_message_tokens(message: dict[str, Any]) -> int:
     """Estimate prompt tokens contributed by one persisted message."""
     content = message.get("content")
     parts: list[str] = []
+    image_tokens = 0
     if isinstance(content, str):
         parts.append(content)
     elif isinstance(content, list):
@@ -113,6 +108,9 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
                 text = part.get("text", "")
                 if text:
                     parts.append(text)
+            elif isinstance(part, dict) and part.get("type") == "image_url":
+                # Approximate allowance for a resized image, not its base64 text length.
+                image_tokens += 4096
             else:
                 parts.append(json.dumps(part, ensure_ascii=False))
     elif content is not None:
@@ -127,12 +125,12 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
 
     payload = "\n".join(parts)
     if not payload:
-        return 1
+        return max(1, image_tokens)
     try:
         enc = tiktoken.get_encoding("cl100k_base")
-        return max(1, len(enc.encode(payload)))
+        return max(1, len(enc.encode(payload)) + image_tokens)
     except Exception:
-        return max(1, len(payload) // 4)
+        return max(1, len(payload) // 4 + image_tokens)
 
 
 def estimate_prompt_tokens_chain(

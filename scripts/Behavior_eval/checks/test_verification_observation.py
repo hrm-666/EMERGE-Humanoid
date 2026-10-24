@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -12,8 +13,8 @@ from unittest.mock import patch
 from PIL import Image
 
 from Emerge.agent.visual_monitor import VisualMonitor
-from Emerge.subagents import ImageContent, TextContent
 from Emerge.subagents.task_verification.tools.observation import ObservationStore
+from Emerge.utils.action_queue import dump_action_document
 
 
 class VerificationObservationStoreTest(unittest.TestCase):
@@ -80,20 +81,18 @@ class VerificationObservationStoreTest(unittest.TestCase):
             self.assertEqual([view.name for view in observation.views], ["front"])
 
 
-class _ImmediateFuture:
-    def result(self):
-        return {"outcome": "not_achieved"}
-
-
 class VisualMonitorCameraSelectionTest(unittest.TestCase):
-    def _captured_content(
+    def _captured_images(
         self,
         workspace: Path,
         *,
         with_verification_manifest: bool,
     ):
         (workspace / "PLAN.md").write_text("plan", encoding="utf-8")
-        (workspace / "ACTION.md").write_text("action", encoding="utf-8")
+        (workspace / "ACTION.md").write_text(dump_action_document({"actions": [{
+            "id": "action-1", "action_type": "vla_execute",
+            "parameters": {"instruction": "approach the radio", "step": 40}, "status": "running",
+        }]}), encoding="utf-8")
         VerificationObservationStoreTest._write_manifest(
             workspace,
             "artifacts/observations/observation.json",
@@ -116,63 +115,42 @@ class VisualMonitorCameraSelectionTest(unittest.TestCase):
             verification_timeout_seconds=1,
             confirmations=1,
         )
-        monitor._main_loop = object()
         subgoal = SimpleNamespace(
             plan_revision="plan-1",
             step_id="step-1",
             subgoal="approach the radio",
             done_criterion="radio is within bimanual reach",
         )
-        with (
-            patch(
-                "Emerge.agent.visual_monitor.read_current_subgoal",
-                return_value=subgoal,
-            ),
-            patch.object(
-                monitor,
-                "_read_pending_action",
-                return_value={"id": "action-1"},
-            ),
-            patch(
-                "Emerge.agent.visual_monitor.concurrent.futures.Future",
-                _ImmediateFuture,
-            ),
-        ):
+        with patch("Emerge.agent.visual_monitor.read_current_subgoal", return_value=subgoal):
             monitor._poll_once()
-        task, _future = monitor._verification_requests.get_nowait()
-        return task.content
+        captured = monitor._traces["action-1"].first
+        self.assertIsNotNone(captured)
+        return captured.images
 
     def test_behavior_visual_monitor_receives_all_four_named_views(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            content = self._captured_content(
+            images = self._captured_images(
                 Path(temporary),
                 with_verification_manifest=True,
             )
-        labels = [
-            item.text.removeprefix("Camera view: ")
-            for item in content
-            if isinstance(item, TextContent) and item.text.startswith("Camera view: ")
-        ]
-        images = [item for item in content if isinstance(item, ImageContent)]
         self.assertEqual(
-            labels,
+            list(images),
             ["room_overview", "table_overhead", "table_side", "head"],
         )
         self.assertEqual(len(images), 4)
+        # Decoding still works after the source workspace was removed.
+        for data in images.values():
+            with Image.open(BytesIO(data)) as image:
+                image.load()
+                self.assertEqual(image.size, (8, 8))
 
     def test_legacy_visual_monitor_keeps_reference_view_only(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            content = self._captured_content(
+            images = self._captured_images(
                 Path(temporary),
                 with_verification_manifest=False,
             )
-        labels = [
-            item.text.removeprefix("Camera view: ")
-            for item in content
-            if isinstance(item, TextContent) and item.text.startswith("Camera view: ")
-        ]
-        images = [item for item in content if isinstance(item, ImageContent)]
-        self.assertEqual(labels, ["head"])
+        self.assertEqual(list(images), ["head"])
         self.assertEqual(len(images), 1)
 
 

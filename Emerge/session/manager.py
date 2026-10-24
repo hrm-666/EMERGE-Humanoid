@@ -19,9 +19,8 @@ class Session:
 
     Stores messages in JSONL format for easy reading and persistence.
 
-    Important: Messages are append-only for LLM cache efficiency.
-    The consolidation process writes summaries to MEMORY.md
-    but does NOT modify the messages list or get_history() output.
+    Raw messages remain available on disk. Compacted context is stored in session
+    metadata; visual action evidence is owned by the monitor's shared journal.
     """
 
     key: str  # channel:chat_id
@@ -57,16 +56,20 @@ class Session:
         out: list[dict[str, Any]] = []
         for m in sliced:
             entry: dict[str, Any] = {"role": m["role"], "content": m.get("content", "")}
-            for k in ("tool_calls", "tool_call_id", "name"):
+            for k in ("tool_calls", "tool_call_id", "name", "reasoning_content", "thinking_blocks", "native_items"):
                 if k in m:
                     entry[k] = m[k]
             out.append(entry)
+        summary = self.metadata.get("context_summary")
+        if summary:
+            out.insert(0, {"role": "user", "content": "[Earlier interaction summary]\n" + summary})
         return out
 
     def clear(self) -> None:
         """Clear all messages and reset session to initial state."""
         self.messages = []
         self.last_consolidated = 0
+        self.metadata.pop("context_summary", None)
         self.updated_at = datetime.now()
 
 

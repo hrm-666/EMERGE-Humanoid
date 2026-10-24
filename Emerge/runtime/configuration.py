@@ -1,20 +1,12 @@
 """Strict configuration loading for execution; no stdout or global config mutation."""
 
-import json
-from pathlib import Path
-
-from Emerge.config.loader import get_config_path
+from Emerge.config.loader import load_config
 from Emerge.config.schema import Config
 from Emerge.runtime.protocol import RunRequest
 
 
 def load_runtime_config(request: RunRequest) -> Config:
-    path = Path(request.config).expanduser().resolve() if request.config else get_config_path()
-    if request.config and not path.is_file():
-        raise ValueError(f"Config file not found: {path}")
-    config = Config.model_validate(json.loads(path.read_text(encoding="utf-8"))) if path.exists() else Config()
-    if request.workspace:
-        config.agents.defaults.workspace = str(Path(request.workspace).expanduser().resolve())
+    config = load_config(request.config, workspace=request.workspace)
     if request.model:
         config.agents.defaults.model = request.model
     if request.max_iterations is not None:

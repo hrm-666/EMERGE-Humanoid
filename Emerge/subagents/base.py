@@ -119,6 +119,7 @@ class BaseSubagent:
                     tool_calls=[call.to_openai_tool_call() for call in response.tool_calls],
                     reasoning_content=response.reasoning_content,
                     thinking_blocks=response.thinking_blocks,
+                    native_items=response.native_items,
                 )
                 observations: list[tuple[str, SubagentToolResult]] = []
                 for call in response.tool_calls:
@@ -147,6 +148,7 @@ class BaseSubagent:
                 response.content,
                 reasoning_content=response.reasoning_content,
                 thinking_blocks=response.thinking_blocks,
+                native_items=response.native_items,
             )
             return self.build_result(
                 task=task,
