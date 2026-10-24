@@ -11,7 +11,6 @@ RESET_TEXT_FILES = (
     Path("EMBODIED.md"),
     Path("ROBOT_STATE.md"),
     Path("PLAN.md"),
-    Path("memory/MEMORY.md"),
 )
 
 

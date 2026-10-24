@@ -1,21 +1,32 @@
 ---
 name: memory
-description: Persistent long-term memory for important facts that should remain available across sessions.
+description: Reuse monitor-recorded action evidence and linked images across tasks.
 metadata: {"Emerge":{"always":true}}
 ---
 
 # Memory
 
-`memory/MEMORY.md` stores long-term facts such as preferences, project context, relationships, and important notes. It is loaded into every conversation.
+`memory/MEMORY.md` is the shared visual action journal. The visual monitor samples
+images while robot actions run, evaluates them against the PLAN stage, and records
+key observations with links to permanent images under `memory/images/`. Records
+survive new tasks and `/new`. Recent entries are included in your context.
 
-## When to Update MEMORY.md
+## Use Evidence in Decisions
 
-Write important facts immediately using `edit_file` or `write_file`:
+After an action, read the monitor's evidence returned with the action result.
+Distinguish the controller's execution status, an observed intermediate milestone,
+and the final observed state. None of these replaces official environment success.
+An image can prove that a condition held earlier without proving it still holds.
 
-- User preferences ("I prefer dark mode")
-- Project context ("The API uses OAuth2")
-- Relationships ("Alice is the project lead")
+When a past attempt is relevant, read its journal entry and use `view_image` to
+inspect the linked evidence. Links in MEMORY.md are relative to `memory/`:
+`images/action_id/frame.jpg` becomes `memory/images/action_id/frame.jpg` when passed
+to `view_image`. Use fresh observations for current geometry and state.
 
-## Auto-consolidation
+The monitor owns the journal and image files. Do not rewrite, summarize over, or
+delete them with file tools. Keep planning decisions in PLAN.md via `update_plan`.
+If monitoring is disabled or an image could not be assessed, treat absent or
+uncertain evidence as unknown, not as proof of success or failure.
 
-Old conversations are automatically summarized into `MEMORY.md` when the session grows large. You do not need to manage this manually.
+Old conversation text may be compacted into a session summary. This does not
+replace or erase the visual journal, its image links, or the saved images.

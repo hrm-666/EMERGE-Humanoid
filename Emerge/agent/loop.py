@@ -29,10 +29,11 @@ from Emerge.base import ToolRegistry
 from Emerge.agent.tools.scene_graph import SceneGraphQueryTool
 from Emerge.agent.tools.shell import ExecTool
 from Emerge.agent.tools.update_plan import UpdatePlanTool
+from Emerge.agent.tools.view_image import ViewImageTool
 from Emerge.bus.events import InboundMessage, OutboundMessage
 from Emerge.bus.queue import MessageBus
 from Emerge.providers.base import LLMProvider
-from Emerge.subagents import SubagentRegistry
+from Emerge.subagents import SubagentRegistry, SubagentToolResult
 from Emerge.subagents.object_location import (
     build_object_location_subagent,
 )
@@ -139,6 +140,9 @@ class AgentLoop:
                     monitor_config.verification_timeout_seconds
                 ),
                 confirmations=monitor_config.confirmations,
+                capture_interval_seconds=monitor_config.capture_interval_seconds,
+                sample_every_n_frames=monitor_config.sample_every_n_frames,
+                buffer_max_frames=monitor_config.buffer_max_frames,
             )
 
         self.on_event = None
@@ -188,6 +192,7 @@ class AgentLoop:
                     protected_paths=protected_paths,
                 )
             )
+        self.tools.register(ViewImageTool(workspace=self.workspace, allowed_dir=allowed_dir))
         self.tools.register(UpdatePlanTool(workspace=self.workspace))
         self.tools.register(ExecTool(
             working_dir=str(self.workspace),
@@ -200,6 +205,7 @@ class AgentLoop:
 
         action_tool = EmbodiedActionTool(
             workspace=self.workspace,
+            visual_monitor=self.visual_monitor,
             visual_interrupts=(
                 self.visual_interrupts if self.visual_monitor is not None else None
             ),
@@ -217,7 +223,7 @@ class AgentLoop:
 
     async def aclose(self) -> None:
         self.stop()
-        self._stop_visual_monitor()
+        await self._stop_visual_monitor()
         await self.provider.aclose()
 
     @staticmethod
@@ -298,6 +304,7 @@ class AgentLoop:
                     messages, response.content, tool_call_dicts,
                     reasoning_content=response.reasoning_content,
                     thinking_blocks=response.thinking_blocks,
+                    native_items=response.native_items,
                 )
 
                 for tool_call in response.tool_calls:
@@ -315,11 +322,12 @@ class AgentLoop:
                     except asyncio.CancelledError:
                         self._emit("tool.cancelled", {"tool_call_id": tool_call.id, "tool": tool_call.name})
                         raise
-                    failed = isinstance(result, str) and result.startswith("Error")
+                    result_text = result.text if isinstance(result, SubagentToolResult) else str(result)
+                    failed = result_text.startswith("Error")
                     self._emit("tool.failed" if failed else "tool.completed",
                                {"tool_call_id": tool_call.id, "tool": tool_call.name,
                                 "duration_ms": round((time.perf_counter() - started) * 1000),
-                                "result": str(result)[:16000]})
+                                 "result": result_text[:16000]})
                     if tool_call.name == "update_plan" and not failed:
                         from Emerge.runtime.snapshots import plan_snapshot
                         self._emit("plan.updated", plan_snapshot(self.workspace))
@@ -337,6 +345,7 @@ class AgentLoop:
                 messages = self.context.add_assistant_message(
                     messages, clean, reasoning_content=response.reasoning_content,
                     thinking_blocks=response.thinking_blocks,
+                    native_items=response.native_items,
                 )
                 final_content = clean
                 break
@@ -373,7 +382,7 @@ class AgentLoop:
                     self._active_tasks.setdefault(msg.session_key, []).append(task)
                     task.add_done_callback(lambda t, k=msg.session_key: self._active_tasks.get(k, []) and self._active_tasks[k].remove(t) if t in self._active_tasks.get(k, []) else None)
         finally:
-            self._stop_visual_monitor()
+            await self._stop_visual_monitor()
 
     def _start_visual_monitor(self) -> bool:
         if self.visual_monitor is None or self.visual_monitor.is_running:
@@ -385,9 +394,9 @@ class AgentLoop:
         )
         return True
 
-    def _stop_visual_monitor(self) -> None:
-        if self.visual_monitor is not None and self.visual_monitor.is_running:
-            self.visual_monitor.stop()
+    async def _stop_visual_monitor(self) -> None:
+        if self.visual_monitor is not None:
+            await self.visual_monitor.aclose()
 
     async def _handle_stop(self, msg: InboundMessage) -> None:
         """Cancel all active tasks for the session."""
@@ -558,7 +567,7 @@ class AgentLoop:
         for m in messages[skip:]:
             entry = dict(m)
             role, content = entry.get("role"), entry.get("content")
-            if role == "assistant" and not content and not entry.get("tool_calls"):
+            if role == "assistant" and not content and not entry.get("tool_calls") and not entry.get("native_items"):
                 continue  # skip empty assistant messages — they poison session context
             if role == "tool" and isinstance(content, str) and len(content) > self._TOOL_RESULT_MAX_CHARS:
                 entry["content"] = content[:self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
@@ -587,15 +596,12 @@ class AgentLoop:
     ) -> str:
         """Process a message directly (for CLI or programmatic usage)."""
         self.last_run_info = {"iterations": 0, "usage": {}, "finish_reason": "stop"}
-        started_monitor = self._start_visual_monitor()
+        self._start_visual_monitor()
         async def report(content, *, tool_hint=False):
             self._emit("agent.progress", {"text": content, "tool_hint": tool_hint})
             if on_progress:
                 await on_progress(content, tool_hint=tool_hint)
-        try:
-            msg = InboundMessage(channel=channel, sender_id="user", chat_id=chat_id, content=content)
-            response = await self._process_message(msg, session_key=session_key, on_progress=report)
-            return response.content if response else ""
-        finally:
-            if started_monitor:
-                self._stop_visual_monitor()
+        msg = InboundMessage(channel=channel, sender_id="user", chat_id=chat_id, content=content)
+        response = await self._process_message(msg, session_key=session_key, on_progress=report)
+        # Runtime stops physical actions before aclose drains the monitor's final evidence.
+        return response.content if response else ""

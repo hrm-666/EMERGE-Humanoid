@@ -8,6 +8,8 @@ from typing import Any
 
 from Emerge.agent.memory import MemoryStore
 from Emerge.agent.skills import SkillsLoader
+from Emerge.subagents.content import to_message_content
+from Emerge.subagents.models import SubagentToolResult
 from Emerge.utils.helpers import build_assistant_message
 
 
@@ -88,7 +90,7 @@ You are Emerge, a helpful AI assistant.
 
 ## Workspace
 Your workspace is at: {workspace_path}
-- Long-term memory: {workspace_path}/memory/MEMORY.md (write important facts here)
+- Visual action memory: {workspace_path}/memory/MEMORY.md (monitor-recorded evidence with image links)
 - Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md
 
 {platform_policy}
@@ -159,15 +161,19 @@ Reply directly with text for conversations. Use the 'message' tool only for mean
         messages: list[dict[str, Any]],
         tool_call_id: str,
         tool_name: str,
-        result: str,
+        result: str | SubagentToolResult,
     ) -> list[dict[str, Any]]:
-        """Add a tool result to the message list."""
+        """Keep image blocks with their tool result; providers handle wire ordering."""
+        if isinstance(result, SubagentToolResult):
+            content = [{"type": "text", "text": result.text}, *to_message_content(result.content)]
+        else:
+            content = result
         messages.append(
             {
                 "role": "tool",
                 "tool_call_id": tool_call_id,
                 "name": tool_name,
-                "content": result,
+                "content": content,
             }
         )
         return messages
@@ -179,6 +185,7 @@ Reply directly with text for conversations. Use the 'message' tool only for mean
         tool_calls: list[dict[str, Any]] | None = None,
         reasoning_content: str | None = None,
         thinking_blocks: list[dict] | None = None,
+        native_items: list[dict] | None = None,
     ) -> list[dict[str, Any]]:
         """Add an assistant message to the message list."""
         messages.append(
@@ -187,6 +194,7 @@ Reply directly with text for conversations. Use the 'message' tool only for mean
                 tool_calls=tool_calls,
                 reasoning_content=reasoning_content,
                 thinking_blocks=thinking_blocks,
+                native_items=native_items,
             )
         )
         return messages

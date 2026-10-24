@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from Emerge.config.loader import get_config_path, load_config
+from Emerge.config.loader import load_config
 from Emerge.providers.factory import create_provider
 from Emerge.subagents import SubagentResult, SubagentTask, TextContent
 from Emerge.subagents.object_location.agent import ObjectLocationSubagent
@@ -27,8 +27,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         type=Path,
-        default=get_config_path(),
-        help="Emerge config file",
+        help="Emerge config file (defaults to workspace/config.json)",
     )
     parser.add_argument(
         "--workspace",
@@ -47,8 +46,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 async def run(args: argparse.Namespace) -> None:
-    config_path = args.config.expanduser().resolve()
-    config = load_config(config_path)
+    config = load_config(args.config, workspace=args.workspace)
     object_location_config = config.subagents.object_location
     model = (
         args.model
@@ -72,24 +70,27 @@ async def run(args: argparse.Namespace) -> None:
         f"Object Location Subagent ready | model={model} | "
         f"workspace={workspace}"
     )
-    if args.task:
-        result = await _run_task(agent, args.task)
-        _print_result(result, diagnostics=agent.last_diagnostics)
-        return
+    try:
+        if args.task:
+            result = await _run_task(agent, args.task)
+            _print_result(result, diagnostics=agent.last_diagnostics)
+            return
 
-    print("Each request uses a fresh context. Type 'exit' to quit.")
-    while True:
-        try:
-            text = (await asyncio.to_thread(input, "object_location> ")).strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return
-        if not text:
-            continue
-        if text.lower() in _EXIT_COMMANDS:
-            return
-        result = await _run_task(agent, text)
-        _print_result(result, diagnostics=agent.last_diagnostics)
+        print("Each request uses a fresh context. Type 'exit' to quit.")
+        while True:
+            try:
+                text = (await asyncio.to_thread(input, "object_location> ")).strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return
+            if not text:
+                continue
+            if text.lower() in _EXIT_COMMANDS:
+                return
+            result = await _run_task(agent, text)
+            _print_result(result, diagnostics=agent.last_diagnostics)
+    finally:
+        await provider.aclose()
 
 
 async def _run_task(

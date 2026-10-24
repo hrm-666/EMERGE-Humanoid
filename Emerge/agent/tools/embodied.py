@@ -26,7 +26,7 @@ from Emerge.utils.action_queue import (
 )
 
 if TYPE_CHECKING:
-    from Emerge.agent.visual_monitor import VisualInterruptCoordinator
+    from Emerge.agent.visual_monitor import VisualInterruptCoordinator, VisualMonitor
 
 
 _BASE_RESULT_TIMEOUT_S = 60.0
@@ -106,9 +106,11 @@ class EmbodiedActionTool(Tool):
         self,
         workspace: Path,
         visual_interrupts: VisualInterruptCoordinator | None = None,
+        visual_monitor: VisualMonitor | None = None,
     ):
         self.workspace = workspace
         self.visual_interrupts = visual_interrupts
+        self.visual_monitor = visual_monitor
         self.active_action_ids: set[str] = set()
         self.on_event = None
 
@@ -131,14 +133,20 @@ class EmbodiedActionTool(Tool):
             return accepted
         dispatch_message, action_id = accepted
         self.active_action_ids.add(action_id)
+        if self.visual_monitor is not None:
+            self.visual_monitor.track_action(action_id, action_type, parameters, reasoning)
         if self.on_event:
             self.on_event("action.updated", {"action_id": action_id, "action_type": action_type, "status": "pending"})
-        return await self._wait_for_action_result(
+        result = await self._wait_for_action_result(
             action_file,
             action_id=action_id,
             dispatch_message=dispatch_message,
             timeout_s=self._result_timeout(action_type, parameters),
         )
+        if self.visual_monitor is not None:
+            memory = await self.visual_monitor.finish_action(action_id)
+            result += "\n\n" + memory
+        return result
 
     @staticmethod
     def _result_timeout(action_type: str, parameters: dict[str, Any]) -> float:
@@ -222,9 +230,10 @@ class EmbodiedActionTool(Tool):
             result = await result_task
             evidence = json.dumps(signal.evidence, ensure_ascii=False)
             return (
-                f"{result} The visual monitor already verified the current subgoal "
-                "as achieved. Do not call task_verification again; update PLAN.md "
-                f"and continue. Visual monitor evidence: {evidence}"
+                f"{result} The visual monitor observed the subgoal criterion during this action "
+                "and requested a stop. This is historical visual evidence; check the final "
+                "observation and current robot state before deciding the next step. "
+                f"Visual monitor evidence: {evidence}"
             )
         finally:
             for task in (result_task, interrupt_task):

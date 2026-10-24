@@ -585,6 +585,7 @@ def _start_agent(
 ) -> subprocess.Popen:
     # Each continuation is a separate run, sharing only this episode's session.
     import uuid
+    from Emerge.config.loader import get_config_path
     run_id = uuid.uuid4().hex
     run_dir = workspace.parent / "agent_runs" / run_id
     request_path = workspace.parent / "agent_requests" / f"{run_id}.json"
@@ -594,7 +595,7 @@ def _start_agent(
         "message": message,
         "session_id": session_id,
         "workspace": str(workspace),
-        "config": str(args.agent_config) if args.agent_config else None,
+        "config": str((args.agent_config or get_config_path()).expanduser().resolve()),
         "restrict_to_workspace": True,
         "stream": False,
     })

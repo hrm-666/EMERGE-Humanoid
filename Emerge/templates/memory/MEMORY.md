@@ -1,23 +1,7 @@
-# Long-term Memory
+# Visual Action Memory
 
-This file stores important information that should persist across sessions.
+The visual monitor records action observations here with links to permanent images
+under `images/`. Entries are shared across tasks and survive `/new`.
 
-## User Information
-
-(Important facts about the user)
-
-## Preferences
-
-(User preferences learned over time)
-
-## Project Context
-
-(Information about ongoing projects)
-
-## Important Notes
-
-(Things to remember)
-
----
-
-*This file is automatically updated by Emerge when important information should be remembered.*
+These are historical observations. Controller completion and visual milestones do
+not replace official task success. Image links are relative to this file.

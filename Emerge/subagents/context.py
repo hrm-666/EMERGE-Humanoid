@@ -24,6 +24,7 @@ class SubagentRunContext:
         tool_calls: list[dict[str, Any]] | None = None,
         reasoning_content: str | None = None,
         thinking_blocks: list[dict] | None = None,
+        native_items: list[dict] | None = None,
     ) -> None:
         """Append one provider-safe assistant message."""
         self.messages.append(
@@ -32,6 +33,7 @@ class SubagentRunContext:
                 tool_calls=tool_calls,
                 reasoning_content=reasoning_content,
                 thinking_blocks=thinking_blocks,
+                native_items=native_items,
             )
         )
 

@@ -8,6 +8,29 @@ always: true
 
 For any multi-step embodied task, track progress in `PLAN.md`. It holds the whole state; you drive the transitions. Update it only with `update_plan`; `write_file`, `edit_file`, and `exec` must not modify `PLAN.md`.
 
+## Visual Context for Planning
+
+Before creating a Main Line or replanning, call `view_image` to put relevant current
+camera images into your own context. Read `artifacts/observations/observation.json`
+to obtain the latest revision and the actual `views[].image_path` values, or use the
+observation path specified by the active embodiment. Pass a selected image path as
+`{"path": "<image_path from the observation manifest>"}`. Start with the view that
+shows the target and its surroundings; inspect other views when needed to resolve
+occlusion or task relationships.
+
+Wait for the image result and inspect it before calling `update_plan`. Reading a
+manifest or a filename alone does not show you the scene. Use the visible target,
+object relationships and scene state to choose milestones and their Done Criteria.
+If the same current image is already in your context, reuse it instead of loading
+it again. If images are unavailable, state what is unobserved and keep the affected
+plan assumptions provisional.
+
+After physical actions, follow the robot-state refresh and terminal checks below
+before loading new images. Old images are historical evidence, not the current
+state. `view_image` supplies visual evidence; measured metric coordinates still
+come from `object_location`, and official task success follows the embodiment's
+terminal rule.
+
 ## Planning Model
 
 - **Main Line**: an ordered list of coarse subgoals (milestones). Do not pre-expand them into concrete robot actions; choose the primitive and action count when executing the current phase.
@@ -19,7 +42,7 @@ For any multi-step embodied task, track progress in `PLAN.md`. It holds the whol
 
 ## Execution Loop
 
-1. **Plan** — on a new task, call `update_plan` with `update_kind="new_mission"`, the Mission, and a short Main Line of coarse milestones.
+1. **Plan** — on a new task, use `view_image` as described above, then call `update_plan` with `update_kind="new_mission"`, the Mission, and a short Main Line of coarse milestones grounded in the observed scene.
 2. **Recover context** — read `PLAN.md` first every turn and identify the current focus: the Branch Stack top when non-empty, otherwise the Pointer subgoal.
 3. **Bind the target** — keep the current Active Target and Intended Change in mind before choosing an action.
 4. **Act** — work only on the current focus. Choose rule actions or `vla_execute` at execution time according to the active embodiment guidance and the needs of the current phase.
@@ -29,7 +52,7 @@ For any multi-step embodied task, track progress in `PLAN.md`. It holds the whol
    exact instruction and keep the current focus in the plan and reasoning.
 5. **Refresh robot state** — immediately after every `execute_robot_action` result, use `read_file` to read the current `ROBOT_STATE.md`. The copy in the original context is stale once the controller has executed an action. Perform this refresh before any PLAN update, visual verification, subagent call, or next robot action.
 6. **Check terminal state** — apply any environment-specific terminal-success rule first. A confirmed full-mission success ends the execution loop immediately; do not continue reasoning about subgoals or call another tool.
-7. **Reassess** — only when the full mission is not complete, compare the observed change with the current Done Criterion.
+7. **Reassess** — only when the full mission is not complete, load the relevant fresh images with `view_image` when judging visible changes or choosing a recovery plan, and compare the observed change with the current Done Criterion.
 8. **Update** — advance or pop when the subgoal is done; otherwise update Retries and recovery state before acting again.
 
 ## Practical Completion Judgment
