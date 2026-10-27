@@ -98,6 +98,15 @@ class RoboCasaEnvManager:
         return self._action_steps
 
     @property
+    def last_gripper_close(self) -> bool | None:
+        """Last applied Gym open/close command, not evidence of a grasp.
+
+        None means no reliable command since reset, close or a physics error.
+        The Gym wrapper closes at action12[6] >= 0.5 and opens below it.
+        """
+        return self._last_gripper_close
+
+    @property
     def sim(self) -> Any:
         """Underlying MuJoCo simulation for later calibration/debugging tools."""
         return self._require_environment().unwrapped.sim
@@ -186,6 +195,7 @@ class RoboCasaEnvManager:
             raise ValueError("RoboCasa action must be a vector of exactly 12 finite real values")
         if self._convert_action is None:
             raise RuntimeError("RoboCasa action converter is not initialized")
+        gripper_close = bool(action[6] >= 0.5)
         action_dict = self._convert_action(action.copy())
         self._camera_manager.clear()
         try:
@@ -200,6 +210,9 @@ class RoboCasaEnvManager:
                 logger.exception("Could not invalidate observation after simulator step failed")
             raise
         self._action_steps += 1
+        # Commit alongside the completed Gym step, before observation/status I/O.
+        # VLA and future geometric actions therefore share one command history.
+        self._last_gripper_close = gripper_close
         self._store_result(obs, reward, terminated, truncated, info)
         if publish_observation:
             self.refresh_cameras()
@@ -236,6 +249,84 @@ class RoboCasaEnvManager:
             self._observation_vector("state.base_position", 3),
             self._observation_vector("state.base_rotation", 4),
         )
+
+    def get_eef_pose_world(self) -> tuple[np.ndarray, np.ndarray]:
+        """Return the grip site's world position and XYZW quaternion, as copies.
+
+        Both components come from the same current MuJoCo site. Resolve the
+        robot on each call: a hard reset can replace robots, controllers and IDs.
+        This read neither updates controller goals nor advances simulation.
+        """
+        site_id = self._right_robot().eef_site_id["right"]
+        if (
+            isinstance(site_id, (bool, np.bool_))
+            or not isinstance(site_id, (int, np.integer))
+            or not 0 <= site_id < len(self.sim.data.site_xpos)
+        ):
+            raise RuntimeError("EEF grip site ID is invalid in the current model")
+        transform = self._pose_transform(
+            self.sim.data.site_xpos[site_id],
+            np.asarray(self.sim.data.site_xmat[site_id]).reshape(3, 3),
+            "EEF grip site",
+        )
+        return transform[:3, 3].copy(), self._rotation_to_quaternion(transform[:3, :3])
+
+    def get_arm_control_frame(self) -> np.ndarray:
+        """Return T_world_control, the right arm's base reference in world.
+
+        This part-specific frame need not equal the mobile base center returned
+        by get_base_pose(). It is read from current simulation data using the
+        composite controller's own API, without calling update_state().
+        """
+        composite = self._right_robot().composite_controller
+        position, rotation = composite.get_controller_base_pose("right")
+        return self._pose_transform(position, rotation, "right arm control frame")
+
+    def get_arm_control_spec(self) -> dict[str, Any]:
+        """Return detached JSON-compatible limits for fixed-impedance delta OSC.
+
+        Validate on demand so unsupported geometric control modes do not alter
+        native environment construction or VLA stepping. Limits are per-axis
+        controller values, not assumed 0.05 m / 0.5 rad defaults. The control
+        frame describes the base origin even when input_ref_frame is 'world'.
+        """
+        robot = self._right_robot()
+        controller = robot.composite_controller.part_controllers["right"]
+        if (
+            controller.name != "OSC_POSE"
+            or controller.control_dim != 6
+            or controller.impedance_mode != "fixed"
+            or controller.input_type != "delta"
+            or controller.input_ref_frame not in {"base", "world"}
+        ):
+            raise RuntimeError(
+                "geometric control requires a 6-D fixed-impedance delta OSC_POSE "
+                "controller with base or world inputs"
+            )
+        site_name = controller.ref_name
+        if (
+            not isinstance(site_name, str)
+            or self.sim.model.site_name2id(site_name) != robot.eef_site_id["right"]
+        ):
+            raise RuntimeError("right arm controller reference must match the EEF grip site")
+        limits = {}
+        for key in ("input_min", "input_max", "output_min", "output_max"):
+            value = np.asarray(getattr(controller, key), dtype=np.float64)
+            if value.shape != (6,) or not np.all(np.isfinite(value)):
+                raise ValueError(f"right arm controller {key} must contain 6 finite values")
+            limits[key] = value
+        for prefix in ("input", "output"):
+            if np.any(limits[f"{prefix}_min"] >= limits[f"{prefix}_max"]):
+                raise ValueError(f"right arm controller {prefix} ranges must be strictly increasing")
+        return {
+            "controller_type": controller.name,
+            "input_type": controller.input_type,
+            "input_ref_frame": controller.input_ref_frame,
+            "impedance_mode": controller.impedance_mode,
+            "control_dim": int(controller.control_dim),
+            "eef_site_name": site_name,
+            **{key: value.tolist() for key, value in limits.items()},
+        }
 
     def get_gripper_qpos(self) -> np.ndarray:
         return self._observation_vector("state.gripper_qpos", 2)
@@ -289,6 +380,7 @@ class RoboCasaEnvManager:
         """
         position, quaternion = self.get_eef_pose_relative()
         base_position, base_quaternion = self.get_base_pose()
+        world_position, world_quaternion = self.get_eef_pose_world()
         return {
             "type": "panda_omron",
             "task": {
@@ -302,12 +394,19 @@ class RoboCasaEnvManager:
                 "orientation_quat_xyzw": quaternion.tolist(),
                 "orientation_reference": "eef_body",
             },
+            "eef_pose_world": {
+                "frame": "world",
+                "reference": "grip_site",
+                "position_m": world_position.tolist(),
+                "orientation_quat_xyzw": world_quaternion.tolist(),
+            },
             "base_pose": {
                 "frame": "world",
                 "position_m": base_position.tolist(),
                 "orientation_quat_xyzw": base_quaternion.tolist(),
             },
             "gripper_qpos": self.get_gripper_qpos().tolist(),
+            "last_gripper_close": self.last_gripper_close,
             "action_steps": self._action_steps,
             "reward": self._latest_reward,
             "terminated": self._latest_terminated,
@@ -368,6 +467,52 @@ class RoboCasaEnvManager:
         self._latest_terminated = False
         self._latest_truncated = False
         self._latest_info: dict[str, Any] = {}
+        self._last_gripper_close: bool | None = None
+
+    def _right_robot(self) -> Any:
+        """Resolve the current single-robot PandaOmron adapter, without caching."""
+        robots = self._require_ready().unwrapped.robots
+        if len(robots) != 1 or "right" not in robots[0].arms:
+            raise RuntimeError("RoboCasa geometry access requires one robot with a right arm")
+        return robots[0]
+
+    @staticmethod
+    def _pose_transform(position: Any, rotation: Any, source: str) -> np.ndarray:
+        position = np.asarray(position, dtype=np.float64)
+        rotation = np.asarray(rotation, dtype=np.float64)
+        if position.shape != (3,) or not np.all(np.isfinite(position)):
+            raise ValueError(f"{source} must have a finite 3-D position")
+        if (
+            rotation.shape != (3, 3)
+            or not np.all(np.isfinite(rotation))
+            or not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-6)
+            or not np.isclose(np.linalg.det(rotation), 1.0, atol=1e-6)
+        ):
+            raise ValueError(f"{source} must have a proper 3x3 rotation")
+        transform = np.eye(4)
+        transform[:3, :3] = rotation
+        transform[:3, 3] = position
+        return transform
+
+    @staticmethod
+    def _rotation_to_quaternion(rotation: np.ndarray) -> np.ndarray:
+        """Convert a validated rotation to XYZW, including rotations near pi.
+
+        The principal eigenvector avoids a trace-only division at 180 degrees.
+        Keep this NumPy-only so reading geometry does not import model packages.
+        """
+        (xx, xy, xz), (yx, yy, yz), (zx, zy, zz) = rotation
+        matrix = np.array([
+            [xx - yy - zz, xy + yx, xz + zx, zy - yz],
+            [xy + yx, yy - xx - zz, yz + zy, xz - zx],
+            [xz + zx, yz + zy, zz - xx - yy, yx - xy],
+            [zy - yz, xz - zx, yx - xy, xx + yy + zz],
+        ]) / 3.0
+        eigenvalues, eigenvectors = np.linalg.eigh(matrix)
+        quaternion = eigenvectors[:, np.argmax(eigenvalues)].copy()
+        if quaternion[3] < 0:
+            quaternion = -quaternion
+        return quaternion
 
     def _store_result(
         self,
