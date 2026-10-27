@@ -39,6 +39,9 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
         seed: int | None = None,
         env_kwargs: dict[str, Any] | None = None,
         mujoco_gl: str = "egl",
+        camera_config: dict[str, dict[str, Any]] | None = None,
+        workspace: str | Path | None = None,
+        observation_config: dict[str, Any] | None = None,
         max_action_steps: int | None = None,
         status_path: str | Path | None = None,
         metadata: dict[str, Any] | None = None,
@@ -49,6 +52,9 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
             seed=seed,
             env_kwargs=env_kwargs,
             mujoco_gl=mujoco_gl,
+            camera_config=camera_config,
+            workspace=workspace,
+            observation_config=observation_config,
         )
         if max_action_steps is not None:
             self._validate_budget(max_action_steps)
@@ -100,6 +106,7 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
         self.close()
         self._reset_evaluation_state()
         try:
+            self._invalidate_published_observation()
             # Replace any previous episode's ready status before construction.
             self._write_evaluation_status()
             super().create()
@@ -118,6 +125,7 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
         self._clear_observation()
         self._action_steps = 0
         try:
+            self._invalidate_published_observation()
             self._write_evaluation_status()
             if self._budget_override is None:
                 registry = importlib.import_module("robocasa.utils.dataset_registry_utils")
@@ -134,7 +142,7 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
             self._write_status_safely()
             raise
 
-    def step(self, action12: Any) -> StepResult:
+    def step(self, action12: Any, *, publish_observation: bool = True) -> StepResult:
         """Count only base step calls and stop before any action beyond the limit."""
         if self._episode_done:
             raise RuntimeError(
@@ -146,7 +154,7 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
             self._write_evaluation_status()
             raise RuntimeError("RoboCasa evaluation budget exhausted; reset before stepping again")
         try:
-            result = super().step(action12)
+            result = super().step(action12, publish_observation=publish_observation)
             # Success wins when the final allowed action also reaches the goal.
             if super().check_success():
                 self._finish("success")
@@ -159,6 +167,10 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
             self._write_evaluation_status()
             return result
         except Exception as exc:
+            # The Gym action can succeed before camera publication raises.
+            # Preserve that native goal signal even without a returned result.
+            if super().check_success():
+                self._finish("success")
             self._record_error(exc)
             self._write_status_safely()
             raise

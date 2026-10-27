@@ -11,9 +11,13 @@ import importlib
 import logging
 import os
 from copy import deepcopy
+from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
+
+from robot.robocasa.cameras import RoboCasaCameraFrame, RoboCasaCameraManager
+from robot.robocasa.observation import RoboCasaObservationWriter
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +36,12 @@ class RoboCasaEnvManager:
     not stop this debug-capable base class. Horizon enforcement, latched episode
     success and evaluation status files belong in RoboCasaEvalEnvManager in
     env_eval.py. Driver-level adaptation to EMERGE belongs in the driver.
+
+    Optional existing/fixed camera configurations add separate calibrated frame
+    caches. They never add keys to latest_obs or alter native policy images.
+    File output is off by default. To enable it, supply workspace and
+    observation_config={"enabled": True, "reference_view": "<configured name>"}.
+    Optional camera_names selects a subset of configured cameras to publish.
     """
 
     def __init__(
@@ -42,6 +52,9 @@ class RoboCasaEnvManager:
         seed: int | None = None,
         env_kwargs: dict[str, Any] | None = None,
         mujoco_gl: str = "egl",
+        camera_config: dict[str, dict[str, Any]] | None = None,
+        workspace: str | Path | None = None,
+        observation_config: dict[str, Any] | None = None,
     ) -> None:
         if not isinstance(env_name, str) or not env_name.strip():
             raise ValueError("env_name must be a non-empty RoboCasa task name")
@@ -58,6 +71,8 @@ class RoboCasaEnvManager:
                 f"pass {', '.join(sorted(reserved))} as constructor arguments, not env_kwargs"
             )
         self.mujoco_gl = mujoco_gl
+        self._camera_manager = RoboCasaCameraManager(camera_config)
+        self._observation_writer = self._make_observation_writer(workspace, observation_config)
         self._environment: Any | None = None
         self._convert_action: Callable[[np.ndarray], dict[str, Any]] | None = None
         self._ready = False
@@ -87,9 +102,20 @@ class RoboCasaEnvManager:
         """Underlying MuJoCo simulation for later calibration/debugging tools."""
         return self._require_environment().unwrapped.sim
 
+    @property
+    def cameras(self) -> dict[str, RoboCasaCameraFrame]:
+        """Latest configured RGB/calibration snapshots; empty when invalidated."""
+        return self._camera_manager.frames
+
+    @property
+    def observation_manifest_path(self) -> Path | None:
+        """Configured output path; its existence indicates a complete publication."""
+        return None if self._observation_writer is None else self._observation_writer.manifest_path
+
     def create(self) -> None:
         """Replace any owned environment and initialize its first episode."""
         self.close()
+        self._invalidate_published_observation()
         # Rendering backends must be selected before importing MuJoCo/robosuite.
         os.environ.setdefault("MUJOCO_GL", self.mujoco_gl)
         importlib.import_module("robocasa")  # Registers robocasa/<task> with Gym.
@@ -103,6 +129,9 @@ class RoboCasaEnvManager:
         )
         self._convert_action = env_utils.convert_action
         try:
+            # Register before the existing explicit reset, which rebuilds the
+            # model. This adds no resets or simulator steps to the native flow.
+            self._camera_manager.install(self._environment)
             self.reset()
         except BaseException:
             try:
@@ -118,19 +147,31 @@ class RoboCasaEnvManager:
         self._validate_seed(seed)
         self._clear_observation()
         self._action_steps = 0
+        if self._observation_writer is not None:
+            self._observation_writer.start_episode()
         if seed is None:
             obs, info = environment.reset()
         else:
             obs, info = environment.reset(seed=int(seed))
         self._store_result(obs, 0.0, False, False, info)
+        try:
+            self.refresh_cameras()
+        except BaseException:
+            self._clear_observation()
+            raise
         return self._latest_obs, dict(self._latest_info)
 
-    def step(self, action12: Any) -> StepResult:
+    def step(self, action12: Any, *, publish_observation: bool = True) -> StepResult:
         """Execute one policy-format action without clipping or re-encoding it.
 
         Ordering is xyz(3), rotation(3), gripper(1), base(3), torso(1), mode(1).
         RoboCasa's converter and Gym wrapper retain responsibility for gripper
         and control-mode thresholds. This method returns Gym's five values.
+
+        publish_observation refreshes camera caches and, if enabled, writes a
+        snapshot. False invalidates the caches while retaining the last published
+        files until refresh_cameras(). Capture/write errors occur after the action
+        was applied and counted; callers must not retry it as if it never executed.
         """
         environment = self._require_ready()
         if self._latest_terminated or self._latest_truncated:
@@ -146,15 +187,22 @@ class RoboCasaEnvManager:
         if self._convert_action is None:
             raise RuntimeError("RoboCasa action converter is not initialized")
         action_dict = self._convert_action(action.copy())
+        self._camera_manager.clear()
         try:
             obs, reward, terminated, truncated, info = environment.step(action_dict)
         except BaseException:
             # A failed simulator step may already have changed physics state.
             # Require reset rather than exposing the preceding observation as fresh.
             self._clear_observation()
+            try:
+                self._invalidate_published_observation()
+            except Exception:
+                logger.exception("Could not invalidate observation after simulator step failed")
             raise
         self._action_steps += 1
         self._store_result(obs, reward, terminated, truncated, info)
+        if publish_observation:
+            self.refresh_cameras()
         return (
             self._latest_obs,
             self._latest_reward,
@@ -193,12 +241,40 @@ class RoboCasaEnvManager:
         return self._observation_vector("state.gripper_qpos", 2)
 
     def get_camera_image(self, camera_name: str) -> np.ndarray:
-        """Return native HWC RGB, already flipped by the RoboCasa Gym wrapper."""
+        """Return a configured camera's RGB, or an unconfigured native Gym image.
+
+        Configured views use their requested capture dimensions. Native policy
+        images in latest_obs retain their original dimensions and pixel values.
+        """
         self._require_ready()
+        name = camera_name.removeprefix("video.")
+        if self._camera_manager.has_camera(name):
+            return self._camera_manager.get_frame(name).rgb
         key = camera_name if camera_name.startswith("video.") else f"video.{camera_name}"
         if key not in self._latest_obs:
             raise KeyError(f"RoboCasa observation is missing camera {key!r}")
         return np.asarray(self._latest_obs[key])
+
+    def get_camera_frame(self, camera_name: str) -> RoboCasaCameraFrame:
+        """Return one configured RGB/calibration snapshot without rendering."""
+        self._require_ready()
+        return self._camera_manager.get_frame(camera_name.removeprefix("video."))
+
+    def refresh_cameras(self) -> dict[str, RoboCasaCameraFrame]:
+        """Capture configured views and calibration without advancing physics.
+
+        The controller must call this synchronously with respect to reset/step.
+        With output enabled, publish the complete cache through the writer.
+        Publication errors preserve the previous complete files for this episode.
+        """
+        self._require_ready()
+        # Keep the unconfigured path independent of simulator camera APIs.
+        if not self._camera_manager.names:
+            return {}
+        frames = self._camera_manager.refresh(self.sim, self._latest_obs)
+        if self._observation_writer is not None:
+            self._observation_writer.write(frames)
+        return frames
 
     def render(self) -> np.ndarray:
         """Return Gym's cached replay image without advancing simulation."""
@@ -244,15 +320,48 @@ class RoboCasaEnvManager:
         return self._environment is not None and self._ready
 
     def close(self) -> None:
-        """Release owned resources; repeated calls are safe."""
+        """Release resources, retaining the last published files for inspection."""
         environment, self._environment = self._environment, None
+        self._camera_manager.close()
         self._convert_action = None
         self._action_steps = 0
         self._clear_observation()
         if environment is not None:
             environment.close()
 
+    def _make_observation_writer(
+        self, workspace: str | Path | None, config: dict[str, Any] | None
+    ) -> RoboCasaObservationWriter | None:
+        if config is not None and not isinstance(config, dict):
+            raise ValueError("observation_config must be a mapping")
+        config = dict(config or {})
+        unknown = set(config) - {"enabled", "reference_view", "camera_names"}
+        if unknown:
+            raise ValueError(f"unsupported observation settings: {', '.join(sorted(unknown))}")
+        enabled = config.get("enabled", False)
+        if not isinstance(enabled, bool):
+            raise ValueError("observation enabled must be a boolean")
+        if not enabled:
+            return None
+        if workspace is None:
+            raise ValueError("workspace is required when observation output is enabled")
+        writer = RoboCasaObservationWriter(
+            workspace,
+            camera_names=config.get("camera_names", self._camera_manager.names),
+            reference_view=config.get("reference_view", ""),
+        )
+        unknown_cameras = set(writer.camera_names) - set(self._camera_manager.names)
+        if unknown_cameras:
+            raise ValueError(f"observation cameras are not configured: {', '.join(sorted(unknown_cameras))}")
+        return writer
+
+    def _invalidate_published_observation(self) -> None:
+        """Remove stale scene publication before rebuilding or after invalid physics."""
+        if self._observation_writer is not None:
+            self._observation_writer.invalidate()
+
     def _clear_observation(self) -> None:
+        self._camera_manager.clear()
         self._ready = False
         self._latest_obs: dict[str, Any] = {}
         self._latest_reward = 0.0
