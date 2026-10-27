@@ -93,7 +93,7 @@ def _driver_kwargs_for_workspace(
 ) -> dict[str, object]:
     """Supply the agent workspace to drivers that store local artifacts."""
     resolved = dict(driver_kwargs or {})
-    if driver_name == "libero_mujoco":
+    if driver_name in {"libero_mujoco", "robocasa"}:
         resolved.setdefault("workspace", str(workspace))
     return resolved
 

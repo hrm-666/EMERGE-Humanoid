@@ -1,0 +1,28 @@
+{
+  "robocasa": {
+    "env_name": "OpenCabinet",
+    "split": "target",
+    "seed": 7,
+    "mujoco_gl": "egl"
+  },
+  "cameras": {
+    "robot0_agentview_left": {"mode": "existing"},
+    "robot0_agentview_right": {"mode": "existing"},
+    "robot0_eye_in_hand": {"mode": "existing"}
+  },
+  "observation": {
+    "enabled": true,
+    "reference_view": "robot0_agentview_left"
+  },
+  "vla": {
+    "server_url": "ws://localhost:8000",
+    "resize_size": 224,
+    "replan_steps": 5,
+    "publish_every_n_steps": 5,
+    "stop_on_success": true
+  },
+  "evaluation": {
+    "enabled": true,
+    "status_path": "artifacts/evaluation/status.json"
+  }
+}
