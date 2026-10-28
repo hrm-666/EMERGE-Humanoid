@@ -2,16 +2,16 @@
 
 <!--
 英文原文：robot/profiles/robocasa.md
-英文原文 SHA-256：f231d7297f713f12144a62a023a00ce2af77eb58c5af39c49956ce9d173db5e0
+英文原文 SHA-256：69614fa87670fea0cc396091bb65fa001bc25e008449ff4642fcab6120810703
 修改英文原文时，请同步修订本译文并更新上述摘要；修改译文时也应对照英文原文。
 运行时 Agent 默认使用英文原文；本文件供中文阅读。
 -->
 
 驱动：`robocasa`
 
-本构型使用 RoboCasa 中的 PandaOmron 移动操作机器人。当前驱动通过
-`vla_execute` 执行机器人控制。使用 `object_location` 和 `task_verification`
-为规划提供依据并检查操作结果。
+本构型使用 RoboCasa 中的 PandaOmron 移动操作机器人。驱动支持 `vla_execute`、
+`move_to_pose`、`move_linear` 和 `set_gripper`。
+使用 `object_location` 和 `task_verification` 为规划提供依据并检查操作结果。
 
 ## 计划管理
 
@@ -34,6 +34,11 @@
 是否成功。如果视觉验证认为已完成，但 `success` 仍为 `false`，先检查尚未满足的
 任务条件，再选择下一步动作。
 
+对于几何运动，完成表示请求的位姿已经收敛。对于 `set_gripper`，完成表示按请求
+步数执行了命令，不证明抓取、释放或精确手指开度已经实现。`last_execution`
+还会报告 `action_type`，以及几何动作存在动作后测量时的 `position_error_m` 和
+`rotation_error_rad`。
+
 如果 `done` 为 `true`，或者 `ready` 为 `false`，停止向本轮 episode 发送机器人
 动作。存在相关字段时，检查 `evaluation.termination_reason`、
 `evaluation.error_message`、`setup_error`，以及 `last_execution.error_message`
@@ -49,11 +54,11 @@
 
 ### 当前控制能力
 
-目前所有机器人运动均通过 `vla_execute` 执行。这是当前实现的能力限制，
-不是针对某类任务要求跳过定位、验证或规划的规则。
-`attach` 及其依赖的几何动作（`move_to_pose`、`move_linear`、`set_gripper`、
-`follow_arc`）尚未接入当前驱动，不要调用。LIBERO 中通过实测几何执行
-attach 接近和运输的路线，需要先完成相应控制接入才能用于这里。
+通过 `move_to_pose`、`move_linear` 和 `set_gripper` 使用 `attach` 技能，
+完成基于测量的粗接近、抬升和空旷路径运输。精细视觉操作交给 VLA。
+几何动作给底座发送零速度、给躯干发送零增量，不负责底座重新定位或碰撞避障规划。
+如果当前站位无法到达目标，应重新评估或使用合适的 VLA 阶段，
+不要反复增加几何动作预算。`follow_arc` 尚未实现，不要调用。
 
 ### 固定结构与大型目的地
 
@@ -70,6 +75,8 @@ attach 接近和运输的路线，需要先完成相应控制接入才能用于�
 让 VLA 将视觉接近、把手接触以及关节结构的打开或关闭作为一个连贯阶段执行。
 在开始依赖该状态的下一阶段前，验证操作后的结构状态。
 如果任务要求门、抽屉或电器最终处于某种状态，必须将该要求保留在计划中。
+attach 只用于有测量依据的空旷空间运动；不要用它拉动关节结构、将未抓住的物体
+推到目标位置，或恢复与橱柜、抽屉、门、把手之间不明确的接触。
 
 当“最初在抽屉中”等关系仅用于识别可移动物体时，该关系本身不要求打开或关闭
 抽屉。如果物体已经可见且可接近，直接定位它。只有通路需要或任务明确要求时，
@@ -79,7 +86,11 @@ attach 接近和运输的路线，需要先完成相应控制接入才能用于�
 
 当前驱动执行普通抓取放置任务时，采用以下路线：
 
-`定位物体 -> VLA 接近并抓取 -> 验证抓取 -> 定位目的地 -> VLA 运输并放置 -> 验证放置`
+`定位物体 -> attach 接近 -> VLA 抓取 -> 验证抓取 -> 定位目的地 -> attach 抬升与运输 -> VLA 放置 -> 验证放置`
+
+成功定位后，如果测量几何支持可达的空旷路径及有用的预操作位姿，应使用 attach。
+如果可靠的手腕朝向仍需猜测，应把接近交给 VLA。
+定位失败时，不要用推测坐标替代。
 
 移动前先绑定源物体身份。运输前验证抓住的是指定物体；夹爪靠近物体不等于
 抓取成功。运输前检查目的地几何与通路。放置后，验证物体已经释放，并满足要求的
@@ -123,10 +134,34 @@ attach 接近和运输的路线，需要先完成相应控制接入才能用于�
 
 - `object_location`：从标定视角中识别并定位当前源物体、目的地或影响通行间隙的结构。
   `found: false` 表示尚未定位；绝不能用猜测坐标替代。
-- `vla_execute`：执行当前阶段的接近、抓取、抬升、运输、对齐、放置或视觉引导的结构交互。
+- `attach`：通过支持的几何动作，使用实测几何完成粗接近、抬升和运输。
+  最终接触交给 VLA。
+- `vla_execute`：执行抓取、最终对齐、放置和视觉引导的结构交互。
+  无法建立可靠几何路线时，也可用于接近或运输。
 - `task_verification`：检查任务关系、抓取与释放、可接近性和不明确的结构状态。
   不确定的结果不等于确认。
-- `attach`：等待几何控制接入；当前驱动不可用。
+
+### 几何动作与夹爪衔接
+
+几何位置和位移均使用世界坐标系，单位为米。目标指向末端 grip site，
+不是物体中心。应根据当前实测几何或经过标定的 `eef_pose_world` 状态确定目标。
+可选 `frame` 参数只接受 `world`。
+
+- `move_to_pose`：提供 `position_m`、`orientation_quat`（XYZW）或
+  `orientation_euler`（roll/pitch/yaw 弧度）二选一，以及正整数 `steps`。
+  无需改变手腕朝向时，复用 `eef_pose_world.orientation_quat_xyzw`。
+- `move_linear`：在 `position_m` 和 `delta_m` 中恰好选择一个，并提供正整数
+  `steps` 和非负整数 `settle_steps`。朝向可选；省略时保持动作开始时的手腕朝向。
+  路径插值与最终收敛都会消耗 episode 预算。遵循 attach 技能的运动预算指导，
+  每次 attach 请求中两者之和不超过 100 步。
+- `set_gripper`：提供值为 `open` 或 `close` 的 `command`，以及正整数 `steps`。
+  不支持连续开度目标 `opening_m` 和 `width_m`。
+
+运动动作会保持最后实际执行的 `last_gripper_close` 命令，包括 VLA 后的命令。
+如果该值为 `null`，应通过 `set_gripper` 显式初始化，或在运动动作中提供
+`gripper_command`（`open` / `close`）。根据当前观察到的抓取状态选择；
+不确定时先验证。绝不能通过打开夹爪来初始化已经持有的物体。
+普通运输应保持关闭命令，不要将 `gripper_command` 覆盖为 `open`。
 
 ### VLA 调用与恢复
 
@@ -151,8 +186,8 @@ attach 接近和运输的路线，需要先完成相应控制接入才能用于�
 相机光学坐标轴为 +X 向右、+Y 向下、+Z 向前；`T_world_camera` 将相机坐标系中的
 点转换到世界坐标系，位置单位为米。
 
-机器人状态具有不同的坐标系标记：`base_pose` 使用世界坐标系，
-`eef_pose_relative` 相对于机器人基座。机器人四元数顺序为 XYZW。
-相对末端位置来自 site，而朝向来自 body；不要将这对数据当作经过标定的 site
-变换，也不要直接与世界坐标定位结果比较。工作目录中的 `objects` 是感知标注；
+`eef_pose_world` 报告几何控制所用同一个 grip site 的世界位置和 XYZW 朝向。
+`base_pose` 也使用世界坐标系。`eef_pose_relative` 是策略使用的原生基座相对观测；
+其中位置来自 site，而朝向来自 body。不要将这对历史约定数据当作经过标定的 site
+变换，也不要直接作为世界坐标目标。工作目录中的 `objects` 是感知标注；
 编辑它们不会移动仿真物体。

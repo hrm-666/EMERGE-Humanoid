@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from robot.drivers.base_driver import BaseDriver, CancelCheck
+from robot.robocasa.actions import RoboCasaActionController
 from robot.robocasa.env import RoboCasaEnvManager
 from robot.robocasa.env_eval import RoboCasaEvalEnvManager
 from robot.vla.robocasa_policy_executor import RoboCasaPolicyExecutor
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 class RoboCasaDriver(BaseDriver):
-    """Expose vla_execute without importing LIBERO or creating a simulator eagerly.
+    """Expose VLA and geometric actions without creating a simulator eagerly.
 
     Task generation is controlled by the robocasa configuration. load_scene()
     accepts workspace object annotations, but does not spawn them in RoboCasa.
@@ -32,6 +33,7 @@ class RoboCasaDriver(BaseDriver):
         robocasa: dict[str, Any] | None = None,
         cameras: dict[str, dict[str, Any]] | None = None,
         observation: dict[str, Any] | None = None,
+        motion: dict[str, Any] | None = None,
         vla: dict[str, Any] | None = None,
         evaluation: dict[str, Any] | None = None,
         profile_path: str | Path | None = None,
@@ -76,6 +78,9 @@ class RoboCasaDriver(BaseDriver):
             self._environment = RoboCasaEvalEnvManager(**common, **eval_config)
         else:
             self._environment = RoboCasaEnvManager(**common)
+        self._actions = RoboCasaActionController(
+            self._environment, config=self._config(motion, "motion")
+        )
         self._vla = RoboCasaPolicyExecutor(self._environment, config=vla)
         self._last_execution: dict[str, Any] | None = None
         self._load_error: str | None = None
@@ -134,31 +139,37 @@ class RoboCasaDriver(BaseDriver):
         self._last_execution = None
         if self._closed:
             return "Failed: RoboCasa driver is closed"
-        if action_type != "vla_execute":
-            return f"Failed: unsupported RoboCasa action {action_type!r}; use vla_execute"
+        if action_type not in {"vla_execute", "move_to_pose", "move_linear", "set_gripper"}:
+            return (
+                f"Failed: unsupported RoboCasa action {action_type!r}; "
+                "use vla_execute, move_to_pose, move_linear or set_gripper"
+            )
         if not self._environment.is_connected():
             return "Failed: RoboCasa environment is unavailable; load the configured task first"
         try:
-            if not isinstance(params, dict):
-                raise ValueError("vla_execute parameters must be an object")
-            unknown = set(params) - {"instruction", "prompt", "step"}
-            if unknown:
-                raise ValueError(f"unsupported vla_execute parameters: {', '.join(sorted(unknown))}")
-            if (
-                "instruction" in params and "prompt" in params
-                and params["instruction"] != params["prompt"]
-            ):
-                raise ValueError("instruction and prompt must agree when both are supplied")
-            if "step" not in params:
-                raise ValueError("vla_execute requires a positive integer step")
-            result = self._vla.execute(
-                params.get("instruction", params.get("prompt")),
-                step=params["step"],
-                cancel_check=cancel_check,
-            )
+            if action_type == "vla_execute":
+                if not isinstance(params, dict):
+                    raise ValueError("vla_execute parameters must be an object")
+                unknown = set(params) - {"instruction", "prompt", "step"}
+                if unknown:
+                    raise ValueError(f"unsupported vla_execute parameters: {', '.join(sorted(unknown))}")
+                if (
+                    "instruction" in params and "prompt" in params
+                    and params["instruction"] != params["prompt"]
+                ):
+                    raise ValueError("instruction and prompt must agree when both are supplied")
+                if "step" not in params:
+                    raise ValueError("vla_execute requires a positive integer step")
+                result = self._vla.execute(
+                    params.get("instruction", params.get("prompt")),
+                    step=params["step"], cancel_check=cancel_check,
+                )
+            else:
+                result = self._actions.execute(action_type, params, cancel_check=cancel_check)
         except Exception as exc:
             return f"Failed: {type(exc).__name__}: {exc}"
-        self._last_execution = asdict(result)
+        self._last_execution = {"action_type": action_type, **asdict(result)}
+        label = "VLA execution" if action_type == "vla_execute" else action_type
         summary = (
             f"steps={result.total_steps}, task_success={str(result.task_success).lower()}, "
             f"reason={result.reason}"
@@ -167,11 +178,11 @@ class RoboCasaDriver(BaseDriver):
             # Controller detects cancellation from this text. Keep arbitrary
             # cancellation text in last_execution so words such as 'failed'
             # in the user's reason cannot change its queue classification.
-            return f"Interrupted: RoboCasa VLA execution; {summary}"
+            return f"Interrupted: RoboCasa {label}; {summary}"
         if result.completed:
-            return f"VLA execution finished: {summary}"
+            return f"{label} finished: {summary}"
         detail = f"; {result.error_message}" if result.error_message else ""
-        return f"Failed: RoboCasa VLA execution; {summary}{detail}"
+        return f"Failed: RoboCasa {label}; {summary}{detail}"
 
     def get_runtime_state(self) -> dict[str, Any]:
         """Publish native frame names under the EMERGE robots.robocasa key.

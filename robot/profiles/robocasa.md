@@ -2,9 +2,9 @@
 
 Driver: `robocasa`
 
-The embodiment uses a PandaOmron mobile manipulator in RoboCasa. The current
-driver supports `vla_execute` for robot control. Use `object_location` and
-`task_verification` to inform planning and check outcomes.
+The embodiment uses a PandaOmron mobile manipulator in RoboCasa. The driver
+supports `vla_execute`, `move_to_pose`, `move_linear`, and `set_gripper`.
+Use `object_location` and `task_verification` to inform planning and check outcomes.
 
 ## Plan Management
 
@@ -29,6 +29,12 @@ verification guides planning; the environment's `success` flag determines
 benchmark success. If verification suggests completion while `success` remains
 `false`, review unmet task conditions before choosing the next action.
 
+For geometric motion, completion means that the requested pose converged.
+For `set_gripper`, it means the command was applied for the requested steps;
+it does not prove a grasp, release, or exact finger opening. `last_execution`
+also reports `action_type` and, for geometric actions, `position_error_m` and
+`rotation_error_rad` when a post-action measurement is available.
+
 If `done` is true or `ready` is false, stop sending robot actions for this
 episode. Inspect `evaluation.termination_reason`, `evaluation.error_message`,
 `setup_error`, and `last_execution.error_message` / `last_execution.error_stage`
@@ -44,12 +50,13 @@ may combine the routes, with prerequisite states checked before each phase.
 
 ### Current Control Capability
 
-All robot motion currently uses `vla_execute`. This is an implementation limit,
-not a task-specific instruction to skip localization, verification, or planning.
-`attach` and its geometric actions (`move_to_pose`, `move_linear`,
-`set_gripper`, and `follow_arc`) are not connected to this driver. Do not call
-them. LIBERO's measured attach approach and transport route requires that
-control integration before it can be used here.
+Use the `attach` skill through `move_to_pose`, `move_linear`, and `set_gripper`
+for measured coarse approach, lifting, and clear-space transport. Use VLA for
+fine visual manipulation. Geometric actions command zero base velocity and
+zero torso increment; they do not plan base repositioning or collision avoidance.
+If the target is not reachable from the current stance, reassess or use an
+appropriate VLA phase rather than repeatedly increasing a geometric budget.
+`follow_arc` is not implemented; do not call it.
 
 ### Fixed Structures and Large Destinations
 
@@ -70,6 +77,9 @@ Let VLA handle visual approach, handle contact, and opening or closing an
 articulated structure as a coherent phase. Verify the resulting state before
 starting a phase that depends on it. When the task requires a final door,
 drawer, or appliance state, retain that requirement in the plan.
+Use attach only for measured clear-space motion; do not use it to pull an
+articulated structure, push an ungrasped object into place, or recover uncertain
+contact with a cabinet, drawer, door, or handle.
 
 When a relation such as "initially in the drawer" only identifies a movable
 object, it does not itself require opening or closing the drawer. If the
@@ -81,7 +91,12 @@ only when access or an explicit task condition requires it.
 Use the following route for an ordinary pick-and-place task with the current
 driver:
 
-`localize object -> VLA approach and grasp -> verify grasp -> localize destination -> VLA transport and place -> verify placement`
+`localize object -> attach approach -> VLA grasp -> verify grasp -> localize destination -> attach lift and transport -> VLA place -> verify placement`
+
+After successful localization, use attach when measured geometry supports a
+reachable clear path and a useful pre-manipulation pose. Leave approach to VLA
+when selecting a reliable wrist orientation would otherwise require guessing.
+Do not substitute speculative coordinates when localization fails.
 
 Bind the source object before moving it. Verify that the intended object is
 held before transporting it; proximity of the gripper alone does not prove a
@@ -137,11 +152,39 @@ rewriting it into phase instructions.
 - `object_location`: identify and localize the current source, destination,
   or clearance-critical structure from calibrated views. Treat `found: false`
   as unlocated; never substitute guessed coordinates.
-- `vla_execute`: perform the current phase's approach, grasp, lift, transport,
-  alignment, placement, or visually guided interaction with a structure.
+- `attach`: use measured geometry for coarse approach, lifting, and transport
+  through the supported geometric actions. Leave final contact to VLA.
+- `vla_execute`: perform grasping, final alignment, placement, and visually
+  guided structure interaction. Use it for approach or transport when a reliable
+  geometric route cannot be established.
 - `task_verification`: check task relations, grasp and release, accessibility,
   and uncertain structure states. An uncertain result is not confirmation.
-- `attach`: pending geometric control integration; unavailable in this driver.
+
+### Geometric Actions and Gripper Continuity
+
+All geometric positions and deltas use world coordinates in metres. Targets
+refer to the EEF grip site, not an object's center. Derive them from current
+measured geometry or the calibrated `eef_pose_world` state. The optional
+`frame` parameter accepts only `world`.
+
+- `move_to_pose`: provide `position_m`, either `orientation_quat` (XYZW) or
+  `orientation_euler` (roll/pitch/yaw radians), and positive integer `steps`.
+  Reuse `eef_pose_world.orientation_quat_xyzw` to preserve the current wrist
+  orientation when no change is required.
+- `move_linear`: provide exactly one of `position_m` or `delta_m`, plus positive
+  integer `steps` and non-negative integer `settle_steps`. Orientation is optional;
+  omitting it preserves the initial wrist orientation. Both interpolation and
+  final settling consume the episode budget. Keep their sum at most 100 steps
+  per attach request, following the attach skill's motion-budget guidance.
+- `set_gripper`: provide `command` as `open` or `close`, plus positive integer
+  `steps`. Continuous `opening_m` and `width_m` targets are unsupported.
+
+Motion preserves the latest applied `last_gripper_close` command, including
+after VLA. If it is `null`, explicitly initialize with `set_gripper`, or pass
+`gripper_command` (`open` / `close`) on the motion. Choose from the current
+observed grasp state; verify uncertainty first. Never initialize a held object
+by opening the gripper. Ordinary transport should retain the closing command,
+not override it with `gripper_command` set to `open`.
 
 ### VLA Calls and Recovery
 
@@ -168,9 +211,10 @@ Localization uses the observation manifest's `coordinate_frame` (`world` in
 this adapter). Camera optical axes are +X right, +Y down, +Z forward;
 `T_world_camera` maps camera points into world coordinates, in metres.
 
-Robot state has different frame labels: `base_pose` is in world coordinates,
-while `eef_pose_relative` is relative to the robot base. Robot quaternions use
-XYZW order. The relative EEF position comes from the site and its orientation
-from the body; do not treat that pair as a calibrated site transform or compare
-it directly with world-frame localization. Workspace `objects` are perception
-annotations; editing them does not move simulated objects.
+`eef_pose_world` reports world position and XYZW orientation of the same grip
+site used by geometric control. `base_pose` is also in world coordinates.
+`eef_pose_relative` is the native policy observation relative to the robot base;
+its position comes from the site and orientation from the body. Do not use that
+legacy pair as a calibrated site transform or directly as world-frame targets.
+Workspace `objects` are perception annotations; editing them does not move
+simulated objects.
