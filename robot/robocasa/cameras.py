@@ -4,7 +4,9 @@ Camera names are MuJoCo model names, without the Gym ``video.`` prefix.
 ``existing`` cameras may specify width/height; omitted dimensions use the
 native image size when available, otherwise 256. ``fixed`` cameras require
 world-frame ``pos`` (metres) and ``quat`` (WXYZ), with optional ``fovy`` in
-degrees (default 62). Only fixed cameras are injected into model XML.
+degrees (default 62). ``auto`` injects LIBERO's five perception camera names
+and uses the shared VGGT rig around legal initial item placement regions after
+every reset, falling back to task fixtures when no item regions are available.
 
 Native images are already upright. Direct MuJoCo renders are flipped once to
 match them. Calibration uses optical camera axes: +X right, +Y down, +Z forward.
@@ -19,6 +21,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+
+from robot.mujoco_simulation.vggt_camera_rig import VggtCameraRig
 
 
 @dataclass(frozen=True)
@@ -55,7 +59,7 @@ class _CameraConfig:
 
 
 class RoboCasaCameraManager:
-    """Inject fixed cameras on model rebuild and cache configured camera views.
+    """Inject fixed/auto cameras and cache configured calibrated camera views.
 
     Register with ``install()`` before the manager's first explicit Gym reset.
     The XML callback then runs on subsequent model rebuilds too. Existing
@@ -71,6 +75,17 @@ class RoboCasaCameraManager:
             for name, settings in (camera_config or {}).items()
         )
         self._frames: dict[str, RoboCasaCameraFrame] = {}
+        auto_names = {c.name for c in self._configs if c.mode == "auto"}
+        if auto_names and auto_names != set(VggtCameraRig._LAYOUT):
+            raise ValueError("auto cameras must declare all five VGGT perception views")
+        self._rig_region: dict[str, Any] | None = None
+
+    @property
+    def rig_region(self) -> dict[str, Any] | None:
+        """Region used for this reset's fixed rig, for diagnostic readers."""
+        from copy import deepcopy
+
+        return deepcopy(self._rig_region)
 
     @property
     def names(self) -> tuple[str, ...]:
@@ -93,12 +108,12 @@ class RoboCasaCameraManager:
 
     def install(self, environment: Any) -> None:
         """Attach one XML processor to a newly created Gym environment."""
-        if any(config.mode == "fixed" for config in self._configs):
+        if any(config.mode in {"fixed", "auto"} for config in self._configs):
             environment.unwrapped.set_xml_processor(self.process_model_xml)
 
     def process_model_xml(self, xml: str) -> str:
         """Add world-fixed cameras without changing existing model elements."""
-        fixed = [config for config in self._configs if config.mode == "fixed"]
+        fixed = [config for config in self._configs if config.mode in {"fixed", "auto"}]
         if not fixed:
             return xml
         root = ET.fromstring(xml)
@@ -116,11 +131,187 @@ class RoboCasaCameraManager:
                 "camera",
                 name=config.name,
                 mode="fixed",
-                pos=" ".join(format(value, ".17g") for value in config.pos),
-                quat=" ".join(format(value, ".17g") for value in config.quat),
+                # Auto placeholders are replaced after native reset selects
+                # the actual kitchen. They are not native Gym policy cameras.
+                pos=" ".join(format(value, ".17g") for value in (config.pos or (0, 0, 2))),
+                quat=" ".join(format(value, ".17g") for value in (config.quat or (1, 0, 0, 0))),
                 fovy=format(config.fovy, ".17g"),
             )
         return ET.tostring(root, encoding="unicode")
+
+    def apply_auto_rig(self, environment: Any) -> None:
+        """Plan once after reset; forward kinematics without advancing physics.
+
+        Region extraction reads already selected fixtures only. It neither
+        reads movable-object poses nor invokes random fixture selection.
+        """
+        self._rig_region = None
+        auto = [config for config in self._configs if config.mode == "auto"]
+        if not auto:
+            return
+        self.clear()
+        native = environment.unwrapped
+        kitchen = native.env
+        sim = native.sim
+        region = self._observation_region(kitchen, sim)
+        poses = VggtCameraRig().plan_from_bounds(
+            bounds_min=np.asarray(region["bounds_min_m"]),
+            bounds_max=np.asarray(region["bounds_max_m"]),
+            look_at=np.asarray(region["look_at_m"]),
+            azimuth_offset_deg=region["azimuth_offset_deg"],
+            camera_settings={c.name: {"width": c.width, "height": c.height, "fovy": c.fovy} for c in auto},
+        )
+        for config in auto:
+            camera_id = int(sim.model.camera_name2id(config.name))
+            if camera_id < 0:
+                raise ValueError(f"RoboCasa model is missing auto camera {config.name!r}")
+            sim.model.cam_pos[camera_id] = poses[config.name].position_m
+            sim.model.cam_quat[camera_id] = poses[config.name].quaternion_wxyz
+            sim.model.cam_fovy[camera_id] = config.fovy
+        sim.forward()
+        self._rig_region = region
+
+    @staticmethod
+    def _observation_region(kitchen: Any, sim: Any) -> dict[str, Any]:
+        """Adapt fixture placement regions to the shared, world-frame rig API."""
+        state = vars(kitchen)
+        fixtures = state.get("fixtures", {})
+        selected: dict[str, Any] = {}
+
+        def add(value: Any) -> Any:
+            if isinstance(value, tuple):
+                value = value[0]
+            if isinstance(value, str):
+                value = fixtures.get(value)
+            if value is not None and callable(getattr(value, "get_ext_sites", None)):
+                selected[value.name] = value
+                return value
+            return None
+
+        anchor = add(state.get("init_robot_base_ref"))
+        for role, value in state.get("fixture_refs", {}).items():
+            if not role.startswith("distr"):
+                add(value)
+        # Several atomic tasks (coffee/blender, for example) do not register
+        # fixture_refs, but expose their already selected fixtures as attributes.
+        for role in ("counter", "cab", "cabinet", "drawer", "sink", "stove",
+                     "coffee_machine", "blender", "toaster", "toaster_oven",
+                     "fridge", "microwave", "stand_mixer", "electric_kettle", "dishwasher"):
+            add(state.get(role))
+        for cfg in state.get("object_cfgs", ()):
+            if not str(cfg.get("name", "")).startswith("distr"):
+                add(cfg.get("placement", {}).get("fixture"))
+        if not selected:
+            raise ValueError("auto camera rig cannot find this task's manipulation fixtures")
+        anchor = anchor if anchor is not None else next(iter(selected.values()))
+
+        # A movable appliance's adjacent lid/object may lie on its parent
+        # counter even when the task has no counter attribute or object_cfgs.
+        if not any("Counter" in type(f).__name__ for f in selected.values()):
+            counters = [f for f in fixtures.values() if "Counter" in type(f).__name__]
+            if counters:
+                def counter_distance(fixture):
+                    points = np.asarray(fixture.get_ext_sites(all_points=True, relative=False))
+                    delta = np.maximum(np.maximum(points.min(0)[:2]-anchor.pos[:2],
+                                                  anchor.pos[:2]-points.max(0)[:2]), 0)
+                    return float(np.linalg.norm(delta))
+                nearest = min(counters, key=counter_distance)
+                if counter_distance(nearest) <= 0.25:
+                    add(nearest)
+
+        # Use legal placement ranges, analogous to LIBERO BDDL regions, rather
+        # than aiming at an entire long counter. Read existing samplers only;
+        # never call sample() or inspect sampled movable-object coordinates.
+        sampling_points: dict[str, list[np.ndarray]] = {}
+        samplers = getattr(state.get("placement_initializer"), "samplers", {})
+        for cfg in state.get("object_cfgs", ()):
+            name = str(cfg.get("name", ""))
+            if name.startswith("distr"):
+                continue
+            sampler = samplers.get(f"{name}_Sampler")
+            fixture = fixtures.get(getattr(sampler, "reference_object", None))
+            if sampler is None or fixture is None:
+                continue
+            yaw = float(sampler.reference_rot)
+            c, s = np.cos(yaw), np.sin(yaw)
+            rotation = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+            region = cfg.get("reset_region") or {}
+            height = max(0.12, float(region.get("height") or 0.32))
+            lower = [min(sampler.x_range), min(sampler.y_range), 0]
+            upper = [max(sampler.x_range), max(sampler.y_range), height]
+            corners = (VggtCameraRig._box_corners(np.asarray(lower), np.asarray(upper))
+                       @ rotation.T + np.asarray(sampler.reference_pos))
+            # Match the native sliding-region displacement, using fixture
+            # geometry, not the placed object's resulting position.
+            region_name = region.get("name")
+            original = getattr(fixture, "_regions", {}).get(region_name, {})
+            elem = original.get("elem")
+            if elem is not None:
+                geom_name = f"{fixture.naming_prefix}reg_{region_name}"
+                try:
+                    geom_id = int(sim.model.geom_name2id(geom_name))
+                except (ValueError, KeyError):
+                    geom_id = -1
+                if geom_id >= 0:
+                    local_center = np.fromstring(elem.get("pos", "0 0 0"), sep=" ")
+                    original_center = local_center @ rotation.T + fixture.pos
+                    corners += sim.data.geom_xpos[geom_id] - original_center
+            sampling_points.setdefault(fixture.name, []).extend(corners)
+
+        points = []
+        for fixture in selected.values():
+            if fixture.name in sampling_points:
+                points.extend(sampling_points[fixture.name])
+                continue
+            # As in LIBERO's placement regions, prioritize legal initial item
+            # locations. A tall destination cabinet must not pull a counter
+            # object's rig upward. Fixtures remain the fallback for tasks
+            # without item placement samplers (e.g. opening a cabinet).
+            if sampling_points:
+                continue
+            regions = fixture.get_reset_regions(env=kitchen)
+            if not regions:
+                points.extend(fixture.get_ext_sites(all_points=True, relative=False))
+                continue
+            yaw = float(fixture.rot)
+            c, s = np.cos(yaw), np.sin(yaw)
+            rotation = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+            for name, region in regions.items():
+                # Sliding interiors move relative to fixture.pos. Read their
+                # compiled region geom transform instead of the closed pose.
+                geom_name = f"{fixture.naming_prefix}reg_{name}"
+                try:
+                    geom_id = int(sim.model.geom_name2id(geom_name))
+                except (ValueError, KeyError):
+                    geom_id = -1
+                if geom_id >= 0:
+                    center = np.asarray(sim.data.geom_xpos[geom_id])
+                    basis = np.asarray(sim.data.geom_xmat[geom_id]).reshape(3, 3)
+                    half = np.asarray(sim.model.geom_size[geom_id])
+                    corners = VggtCameraRig._box_corners(-half, half) @ basis.T + center
+                else:
+                    offset = np.asarray(region["offset"], dtype=float)
+                    size = np.asarray(region["size"], dtype=float)
+                    height = max(0.12, float(region.get("height") or 0.32))
+                    lower = offset - np.array([size[0]/2, size[1]/2, 0])
+                    upper = offset + np.array([size[0]/2, size[1]/2, height])
+                    corners = VggtCameraRig._box_corners(lower, upper) @ rotation.T + fixture.pos
+                points.extend(corners)
+        points = np.asarray(points, dtype=float)
+        if points.ndim != 2 or points.shape[1] != 3 or not np.all(np.isfinite(points)):
+            raise ValueError("task fixtures have invalid observation bounds")
+        minimum = points.min(0) - [0.10, 0.10, 0.02]
+        maximum = points.max(0) + [0.10, 0.10, 0.05]
+        return {
+            "fixture_names": list(selected),
+            "placement_region_fixtures": list(sampling_points),
+            "bounds_min_m": minimum.tolist(),
+            "bounds_max_m": maximum.tolist(),
+            "look_at_m": ((minimum+maximum)/2).tolist(),
+            # Fixture fronts point along local -Y. Rotate the original +X rig
+            # to that accessible side; preserve all five relative angles.
+            "azimuth_offset_deg": float(np.rad2deg(anchor.rot)-90.0),
+        }
 
     def refresh(self, sim: Any, native_obs: Mapping[str, Any]) -> dict[str, RoboCasaCameraFrame]:
         """Capture a complete set at the current physics state, without stepping.
@@ -176,6 +367,7 @@ class RoboCasaCameraManager:
     def close(self) -> None:
         """Discard snapshots; rendering resources are owned by the environment."""
         self.clear()
+        self._rig_region = None
 
     @staticmethod
     def _rgb_array(value: Any, name: str) -> np.ndarray:
@@ -206,9 +398,9 @@ class RoboCasaCameraManager:
                 f"camera {name!r} has unsupported settings: {', '.join(sorted(unknown))}"
             )
         mode = settings.get("mode", "existing")
-        if not isinstance(mode, str) or mode not in {"existing", "fixed"}:
+        if not isinstance(mode, str) or mode not in {"existing", "fixed", "auto"}:
             raise ValueError(
-                f"camera {name!r} mode must be existing or fixed; auto is not implemented"
+                f"camera {name!r} mode must be existing, fixed or auto"
             )
         dimensions = []
         for key in ("width", "height"):
@@ -224,12 +416,20 @@ class RoboCasaCameraManager:
             if {"pos", "quat", "fovy"}.intersection(settings):
                 raise ValueError(f"existing camera {name!r} cannot override model pose or FOV")
             return _CameraConfig(name, mode, *dimensions)
-        pos = cls._vector(settings.get("pos"), 3, f"{name}.pos")
-        quat = cls._vector(settings.get("quat"), 4, f"{name}.quat (WXYZ)")
-        norm = float(np.linalg.norm(quat))
-        if not np.isfinite(norm) or norm == 0.0:
-            raise ValueError(f"camera {name!r} requires a nonzero finite quaternion")
-        quat = tuple(value / norm for value in quat)
+        pos = quat = None
+        if mode == "auto":
+            if {"pos", "quat"}.intersection(settings):
+                raise ValueError(f"auto camera {name!r} pose is determined by the shared rig")
+            if any(value is None for value in dimensions):
+                raise ValueError(f"auto camera {name!r} requires width and height")
+        else:
+            pos = cls._vector(settings.get("pos"), 3, f"{name}.pos")
+            quat = cls._vector(settings.get("quat"), 4, f"{name}.quat (WXYZ)")
+        if quat is not None:
+            norm = float(np.linalg.norm(quat))
+            if not np.isfinite(norm) or norm == 0.0:
+                raise ValueError(f"camera {name!r} requires a nonzero finite quaternion")
+            quat = tuple(value / norm for value in quat)
         raw_fovy = settings.get("fovy", 62.0)
         if isinstance(raw_fovy, (bool, np.bool_)) or not np.isscalar(raw_fovy):
             raise ValueError(f"camera {name!r} fovy must be a finite number between 0 and 180")

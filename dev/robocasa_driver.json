@@ -6,13 +6,56 @@
     "mujoco_gl": "egl"
   },
   "cameras": {
-    "robot0_agentview_left": {"mode": "existing"},
-    "robot0_agentview_right": {"mode": "existing"},
-    "robot0_eye_in_hand": {"mode": "existing"}
+    "robot0_agentview_left": {
+      "mode": "existing"
+    },
+    "robot0_agentview_right": {
+      "mode": "existing"
+    },
+    "robot0_eye_in_hand": {
+      "mode": "existing"
+    },
+    "perception_oblique_1": {
+      "mode": "auto",
+      "fovy": 62.0,
+      "width": 518,
+      "height": 518
+    },
+    "perception_oblique_2": {
+      "mode": "auto",
+      "fovy": 62.0,
+      "width": 518,
+      "height": 518
+    },
+    "perception_oblique_3": {
+      "mode": "auto",
+      "fovy": 62.0,
+      "width": 518,
+      "height": 518
+    },
+    "perception_side_1": {
+      "mode": "auto",
+      "fovy": 65.0,
+      "width": 518,
+      "height": 518
+    },
+    "perception_side_2": {
+      "mode": "auto",
+      "fovy": 65.0,
+      "width": 518,
+      "height": 518
+    }
   },
   "observation": {
     "enabled": true,
-    "reference_view": "robot0_agentview_left"
+    "reference_view": "perception_oblique_1",
+    "camera_names": [
+      "perception_oblique_1",
+      "perception_oblique_2",
+      "perception_oblique_3",
+      "perception_side_1",
+      "perception_side_2"
+    ]
   },
   "motion": {
     "position_gain": 0.5,

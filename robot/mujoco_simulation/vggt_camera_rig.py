@@ -60,18 +60,60 @@ class VggtCameraRig:
             ],
             dtype=np.float64,
         )
+        return self.plan_from_bounds(
+            bounds_min=bounds_min,
+            bounds_max=bounds_max,
+            look_at=look_at,
+            camera_settings=camera_settings,
+        )
+
+    def plan_from_bounds(
+        self,
+        *,
+        bounds_min: np.ndarray,
+        bounds_max: np.ndarray,
+        look_at: np.ndarray,
+        camera_settings: dict[str, dict[str, Any]],
+        azimuth_offset_deg: float = 0.0,
+    ) -> dict[str, CameraPose]:
+        """Plan the same rig from explicit world bounds for another simulator.
+
+        The optional azimuth rotates the entire rig toward a workspace's
+        accessible side. LIBERO retains its original zero-offset calculation.
+        This method performs geometry only; it never samples or moves physics.
+        """
+        if set(camera_settings) != set(self._LAYOUT):
+            expected = ", ".join(self._LAYOUT)
+            raise ValueError(f"automatic VGGT rig requires these cameras: {expected}")
+        bounds_min, bounds_max, look_at = (
+            np.asarray(value, dtype=np.float64)
+            for value in (bounds_min, bounds_max, look_at)
+        )
+        if any(value.shape != (3,) or not np.all(np.isfinite(value))
+               for value in (bounds_min, bounds_max, look_at)):
+            raise ValueError("rig bounds and look_at must be finite 3-vectors")
+        if np.any(bounds_max <= bounds_min):
+            raise ValueError("rig bounds_max must exceed bounds_min on every axis")
+        if not np.isfinite(azimuth_offset_deg):
+            raise ValueError("rig azimuth offset must be finite")
 
         poses: dict[str, CameraPose] = {}
         for name, (azimuth_deg, elevation_deg) in self._LAYOUT.items():
             settings = camera_settings[name]
-            direction = self._view_direction(azimuth_deg, elevation_deg)
+            fovy = float(settings.get("fovy", 62.0))
+            width, height = float(settings["width"]), float(settings["height"])
+            if not (np.isfinite(fovy) and 0 < fovy < 180
+                    and np.isfinite(width) and width > 0
+                    and np.isfinite(height) and height > 0):
+                raise ValueError(f"invalid camera FOV or dimensions for {name!r}")
+            direction = self._view_direction(azimuth_deg + azimuth_offset_deg, elevation_deg)
             fitted_distance = self._fit_distance(
                 bounds_min=bounds_min,
                 bounds_max=bounds_max,
                 look_at=look_at,
                 camera_direction=direction,
-                fovy_deg=float(settings.get("fovy", 62.0)),
-                aspect=float(settings["width"]) / float(settings["height"]),
+                fovy_deg=fovy,
+                aspect=width / height,
             )
             distance = max(
                 self._MIN_DISTANCE_M,

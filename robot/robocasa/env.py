@@ -37,7 +37,7 @@ class RoboCasaEnvManager:
     success and evaluation status files belong in RoboCasaEvalEnvManager in
     env_eval.py. Driver-level adaptation to EMERGE belongs in the driver.
 
-    Optional existing/fixed camera configurations add separate calibrated frame
+    Optional existing/fixed/auto camera configurations add calibrated frame
     caches. They never add keys to latest_obs or alter native policy images.
     File output is off by default. To enable it, supply workspace and
     observation_config={"enabled": True, "reference_view": "<configured name>"}.
@@ -164,6 +164,9 @@ class RoboCasaEnvManager:
             obs, info = environment.reset(seed=int(seed))
         self._store_result(obs, 0.0, False, False, info)
         try:
+            # A reset may select another kitchen. Plan once for its fixtures,
+            # then retain those world-fixed perception views for this episode.
+            self._camera_manager.apply_auto_rig(environment)
             self.refresh_cameras()
         except BaseException:
             self._clear_observation()

@@ -33,3 +33,4 @@ logs/
 *.pth
 *.pt
 .DS_Store
+tests
