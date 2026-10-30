@@ -36,7 +36,7 @@ python -B scripts/RoboCasa_eval/eval_robocasa_agent.py \
 3. 等待私有状态、`robots.robocasa`、profile 和初始相机观测就绪，从环境获取原始任务指令及预算。
 4. 用 EmergePolicy Python 启动现有 headless runtime。主 agent 自主规划、调用子代理并执行几何/VLA 动作；启动器不预写任务动作序列。
 5. 监督环境状态。主 agent 正常提前返回、任务仍未完成时，最多进行两轮同 session 的继续反馈。每轮使用独立 run_id，共享最初的执行截止时间。
-6. 成功、预算耗尽、超时、异常或收到中断后，先停止主 agent，让它通过仍在运行的 Controller 取消未完成动作，再清理 Controller，最后保存结果。
+6. 成功、预算耗尽、超时、异常或收到中断后，先停止主 agent，让它通过仍在运行的 Controller 取消未完成动作，再清理 Controller，关闭视频编码器，最后保存结果。
 
 RoboCasa 保留 `gym.make(seed=...)` 及既有 reset 流程，不引入 LIBERO 的 BDDL、初始状态数组或额外 settling 动作。没有 `--max-steps` 或 driver 配置覆盖时，动作预算由原生任务 registry 解析。VLA 与几何动作共享这个预算。
 
@@ -46,13 +46,14 @@ RoboCasa 保留 `gym.make(seed=...)` 及既有 reset 流程，不引入 LIBERO �
 | --- | --- |
 | `--env-name` | 必填，原生 RoboCasa 任务类名 |
 | `--split` / `--seed` | 默认 `target` / `7` |
+| `--record-video` / `--no-record-video` | 默认录制 `rollout.mp4`；诊断时可以显式关闭 |
 | `--max-steps` | 覆盖整个 episode 的控制步数预算 |
 | `--max-agent-iterations` | 覆盖每轮主 agent 的工具迭代上限；默认使用 API 配置中的值 |
 | `--max-agent-feedback-rounds` | 主 agent 正常返回但任务未完成时的继续反馈次数，默认 2 |
 | `--ready-timeout-s` | 环境初始化超时，默认 300 秒 |
 | `--episode-timeout-s` | 就绪后的执行超时，默认 1800 秒，续跑不会重置 |
 | `--shutdown-grace-s` | 子进程收到中断后的退出宽限，默认 15 秒 |
-| `--skip-service-checks` | 仅在受控诊断中跳过本地模型健康检查；结果会明确记录是否跳过 |
+| `--skip-service-checks` | 仅在受控诊断中跳过本地模型健康检查；日志会记录是否跳过 |
 
 ## 输出与判定
 
@@ -60,11 +61,11 @@ RoboCasa 保留 `gym.make(seed=...)` 及既有 reset 流程，不引入 LIBERO �
 <output-dir>/
   driver_config.json    # 本次仿真配置
   status.json           # Controller 写入的官方环境状态，位于 agent workspace 之外
-  result.json           # 启动器最终结果
+  result.json           # 沿用 LIBERO 字段结构的最终成绩
+  rollout.mp4           # H.264 视频，默认录制
   controller.log
   agent.log
-  agent_requests/       # headless 请求，只引用正式 API 配置路径
-  agent_runs/           # 每轮请求、事件、运行结果和日志
+  agent_runs/           # EMERGE 原有的每轮请求快照、事件、结果及日志
   workspace/
     AGENTS.md
     EMBODIED.md
@@ -75,18 +76,22 @@ RoboCasa 保留 `gym.make(seed=...)` 及既有 reset 流程，不引入 LIBERO �
     memory/             # 通用运行时生成的视觉记忆
 ```
 
-只有 `status.json` 中官方 `success=true` 才能判定 benchmark 成功。主 agent 的“完成”回复、动作执行完成或视觉验证结果都不替代它。结果中的 `outcome` 区分：
+只有 `status.json` 中官方 `success=true` 才能判定 benchmark 成功。主 agent 的“完成”回复、动作执行完成或视觉验证结果都不替代它。
 
-- `success`：环境确认成功。
-- `task_failure`：预算耗尽、执行时间耗尽或主 agent 结束时任务仍未完成。
-- `infrastructure_error`：环境初始化/仿真、模型服务、协议或进程等执行问题。
-- `cancelled`：用户通过 SIGINT/SIGTERM 中断启动器。
+`result.json` 沿用 LIBERO 单 episode 结果的字段结构：schema、episode 标识、任务信息、指令、成功标志、结束原因、步数及预算、agent 继续反馈次数、运行目录、耗时与起止时间，以及 `action_count`、`actions_by_type`、`actions_by_status` 动作统计。任务信息使用 RoboCasa 的 `env_name`、`split`、`seed`，不套用 LIBERO 的 `suite`、`task_id`、`trial`。不再另加 `outcome`、`video_path`、顶层异常信息或嵌套整份运行状态。
 
-`termination_reason`、`errors` 和 `environment_status` 保留具体原因。初始化 NaN 等错误不会记为策略失败；成功后产生的清理异常会保留在 `errors` 中，官方成功标记仍保留。
-`process_cleanup` 记录子进程是否需要强制终止；`service_checks` 记录启动时的模型健康检查。纯几何动作诊断可以显式跳过服务检查，正常 EMERGE 评测应保留检查。
+`status.json` 是覆盖更新的进程通信文件，顶层字段与 LIBERO 一致：`schema_version`、`ready`、`success`、`done`、`reward`、`environment_steps`、`settling_steps`、`action_steps`、`max_action_steps`、`termination_reason`、`metadata`。RoboCasa 没有额外初始化 settling 动作，因此 `settling_steps=0`、`environment_steps=action_steps`；几何动作中的保持步数仍计入 `action_steps`。任务名、split、seed、原生指令与异常详情放在 `metadata` 中。
+
+与 LIBERO 一样，结果中的 `termination_reason` 以 `infrastructure_error:` 前缀标记环境、服务或进程错误；`success` 表示环境成功，`max_action_steps`、`episode_timeout` 等表示任务未完成，`interrupted` 表示用户中断。初始化 NaN 等错误仍与策略失败分开判定。`controller.log` 和 `agent.log` 完整保留，启动器的健康检查、退出清理及异常诊断附加到 `agent.log`。每轮 headless 的 `agent_runs/<run_id>/result.json` 继续使用通用运行时原有格式。
+
+启动请求只在运行期间使用临时 `.agent_request.json`，结束后删除；每轮请求快照由 EMERGE 原样保存在 `agent_runs/<run_id>/request.json`，不再另外保留重复的 `agent_requests/`。`sessions/`、`memory/` 及其图片的原有工作机制不变。
 
 CLI 返回码：0 表示评测正常结束（包括任务失败），1 表示执行基础设施错误，130 表示中断，2 表示命令/配置参数错误。判断任务成功请读取 `result.json.success`。
 
 相机图片沿用 LIBERO 的更新方式：每个相机使用固定 PNG 路径，通过临时文件替换当前图片，再更新 `observation.json`，不会按观测版本累积历史目录。历史动作证据由现有视觉监控独立保存在 `memory/images/`。PNG 路径代表当前画面，查看历史画面应使用视觉记忆中的关键图。
 
-第一版只负责一个 episode。批量调度、断点续跑和连续 MP4 录像尚未实现；当前保存的是已发布的相机快照、动作历史及运行时记忆。
+默认视频为任务目录下的 `rollout.mp4`，使用 RoboCasa 原生左前相机 `video.robot0_agentview_left`，H.264 编码，可在浏览器和 VS Code 中播放。初始化成功后记录一帧，每个已完成的控制步再记录一帧，帧率取原生环境的 `control_freq`（通常 20 FPS）。VLA 与几何动作、各次 agent 继续调用都记录到同一个视频中，正常结束、失败和 Ctrl+C 清理时关闭编码器。
+
+视频按仿真控制步回放，不把 LLM 等待时间填成静止画面；采集不增加仿真步、不重新渲染、不新增历史 PNG。环境初始化尚未生成可用观测就失败时无法生成视频。视频使用固定文件名 `rollout.mp4`，与 LIBERO 一样不在结果中另存路径字段。编码依赖 RoboCasa Python 环境中的 `imageio` 和 `imageio-ffmpeg`；与现有 OpenPI 录像使用同一依赖。
+
+入口仍只负责一个 episode，批量调度和断点续跑尚未实现。

@@ -57,10 +57,11 @@ class RoboCasaDriver(BaseDriver):
             observation_config=dict(observation or {}),
         )
         if enabled:
-            status = eval_config.get("status_path", "artifacts/evaluation/status.json")
-            if status is not None:
-                path = Path(status).expanduser()
-                eval_config["status_path"] = path if path.is_absolute() else self._workspace / path
+            eval_config.setdefault("status_path", "artifacts/evaluation/status.json")
+            for key in ("status_path", "video_path"):
+                if eval_config.get(key) is not None:
+                    path = Path(eval_config[key]).expanduser()
+                    eval_config[key] = path if path.is_absolute() else self._workspace / path
             self._environment = RoboCasaEvalEnvManager(**common, **eval_config)
         else:
             self._environment = RoboCasaEnvManager(**common)

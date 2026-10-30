@@ -75,7 +75,7 @@ def terminal_outcome(status: dict[str, Any]) -> tuple[str, str] | None:
         return "success", "success"
     if status.get("done"):
         reason = status.get("termination_reason") or "environment_done"
-        if reason in {"error", "closed"} or status.get("error_message"):
+        if reason in {"error", "closed"} or status.get("metadata", {}).get("error_message"):
             return "infrastructure_error", str(reason)
         return "task_failure", str(reason)
     return None
@@ -98,10 +98,8 @@ def prepare_episode(args: argparse.Namespace, directory: Path) -> Path:
     evaluation.update(enabled=True, status_path=str(directory / "status.json"))
     if args.max_steps is not None:
         evaluation["max_action_steps"] = args.max_steps
-    evaluation["metadata"] = {
-        **(evaluation.get("metadata") or {}), "episode_id": directory.name,
-        "env_name": args.env_name, "split": args.split, "seed": args.seed,
-    }
+    evaluation.pop("metadata", None)
+    evaluation["video_path"] = str(directory / "rollout.mp4") if args.record_video else None
     if not config.get("observation", {}).get("enabled"):
         raise ValueError("agent evaluation requires observation.enabled=true")
     workspace.mkdir()
@@ -125,7 +123,7 @@ def runtime_environment() -> dict[str, str]:
 
 
 def check_services(args: argparse.Namespace, directory: Path, checks: list[dict]) -> None:
-    """Probe model servers directly, independently of the remote LLM provider."""
+    """Probe model servers; diagnostics are appended to agent.log."""
     from Emerge.config.loader import load_config
     config = load_config(args.agent_config)
     driver = read_json(directory / "driver_config.json")
@@ -216,7 +214,7 @@ def start_agent(args: argparse.Namespace, directory: Path, workspace: Path,
         cancel_timeout_s=min(10., max(.1, args.shutdown_grace_s-1)),
         max_iterations=args.max_agent_iterations,
     )
-    request_path = directory / "agent_requests" / f"{request.run_id}.json"
+    request_path = directory / ".agent_request.json"
     output = directory / "agent_runs" / request.run_id
     atomic_json(request_path, request.model_dump(mode="json"))
     process = start_process(
@@ -275,7 +273,7 @@ class EpisodeSupervisor:
             status = read_status(directory / "status.json")
             terminal = terminal_outcome(status)
             if terminal and terminal[0] == "infrastructure_error":
-                raise EpisodeError("initialization_error", status.get("error_message") or terminal[1],
+                raise EpisodeError("initialization_error", status.get("metadata", {}).get("error_message") or terminal[1],
                                    "environment_initialization")
             robot = load_robot_state_doc(workspace / "ROBOT_STATE.md").get("robots", {}).get("robocasa", {})
             if status.get("ready") and robot.get("ready"):
@@ -284,7 +282,7 @@ class EpisodeSupervisor:
                 if (not (workspace / "EMBODIED.md").is_file() or not views
                         or not all((workspace / v["image_path"]).is_file() for v in views)):
                     raise EpisodeError("observation_unavailable", "Initial profile/images are incomplete", "environment_initialization")
-                if not status.get("instruction") or status.get("max_action_steps") is None:
+                if not status.get("metadata", {}).get("instruction") or status.get("max_action_steps") is None:
                     raise EpisodeError("initialization_error", "Task instruction or horizon is missing", "environment_initialization")
                 return status
             if controller.poll() is not None:
@@ -305,7 +303,6 @@ class EpisodeSupervisor:
         feedback_rounds = 0
         instruction = ""
         errors: list[dict[str, Any]] = []
-        agent_runs: list[dict[str, Any]] = []
         process_cleanup: list[dict[str, Any]] = []
         service_checks: list[dict[str, Any]] = []
         phase = "preparation"
@@ -317,6 +314,8 @@ class EpisodeSupervisor:
             if not args.skip_service_checks:
                 phase = "service_preflight"
                 check_services(args, directory, service_checks)
+            else:
+                service_checks.append({"service_checks_skipped": True})
             with (directory / "controller.log").open("w", encoding="utf-8") as controller_log, (directory / "agent.log").open("w", encoding="utf-8") as agent_log:
                 try:
                     phase = "environment_initialization"
@@ -326,7 +325,7 @@ class EpisodeSupervisor:
                          "--interval", str(args.poll_interval_s)], workspace, controller_log,
                     )
                     status = self.wait_ready(controller, directory, workspace)
-                    instruction = status["instruction"]
+                    instruction = status["metadata"]["instruction"]
                     print(f"READY {args.env_name} seed={args.seed} budget={status['max_action_steps']}", flush=True)
                     phase = "episode_execution"
                     deadline = time.monotonic()+args.episode_timeout_s
@@ -338,8 +337,8 @@ class EpisodeSupervisor:
                         terminal = terminal_outcome(status)
                         if terminal:
                             outcome, reason = terminal
-                            if status.get("error_message"):
-                                errors.append({"stage": "environment_execution", "message": status["error_message"]})
+                            if status.get("metadata", {}).get("error_message"):
+                                errors.append({"stage": "environment_execution", "message": status["metadata"]["error_message"]})
                             break
                         if controller.poll() is not None:
                             raise EpisodeError("controller_exited", f"Controller exited unexpectedly ({controller.returncode}); see controller.log", "controller")
@@ -349,15 +348,11 @@ class EpisodeSupervisor:
                         if agent is None:
                             agent, request, result_path = start_agent(args, directory, workspace, session_id,
                                                                      instruction, status, deadline, feedback_rounds, agent_log)
-                            agent_runs.append({"run_id": request.run_id, "session_id": session_id,
-                                               "result_path": str(result_path)})
                         elif agent.poll() is not None:
                             try:
                                 result = read_agent_result(result_path, request, agent.returncode)
                             except (OSError, ValueError) as exc:
                                 raise EpisodeError("invalid_agent_result", str(exc), "agent_execution") from exc
-                            agent_runs[-1].update(returncode=agent.returncode, run_status=result.run_status,
-                                                  finish_reason=result.finish_reason, usage=result.usage)
                             # Read again after exit so a final successful action wins.
                             status = read_status(directory / "status.json")
                             terminal = terminal_outcome(status)
@@ -411,19 +406,12 @@ class EpisodeSupervisor:
             outcome, reason = "success", "success"
         elif status.get("termination_reason") == "error" and outcome != "cancelled":
             outcome = "infrastructure_error"
-            if not any(e.get("message") == status.get("error_message") for e in errors):
-                errors.append({"stage": "environment_execution", "message": status.get("error_message") or "Environment error"})
+            message = status.get("metadata", {}).get("error_message") or "Environment error"
+            if not any(e.get("message") == message for e in errors):
+                errors.append({"stage": "environment_execution", "message": message})
         elif errors and any(e["stage"] == "cleanup" for e in errors) and outcome != "cancelled":
             outcome = "infrastructure_error"
-        for run in agent_runs:
-            try:
-                result = RunResult.model_validate(read_json(Path(run["result_path"])))
-                if result.run_id == run["run_id"] and result.session_id == run["session_id"]:
-                    run.update(run_status=result.run_status, finish_reason=result.finish_reason, usage=result.usage)
-            except (OSError, ValueError):
-                pass  # A force-stopped agent need not have produced a protocol result.
         try:
-            metrics = action_metrics(workspace / "ACTION.md")
             robot = load_robot_state_doc(workspace / "ROBOT_STATE.md").get("robots", {}).get("robocasa", {})
             execution = robot.get("last_execution") or {}
             if (not status.get("success") and outcome != "cancelled"
@@ -434,26 +422,36 @@ class EpisodeSupervisor:
                           else f"driver_{execution['error_stage']}_error")
                 errors.append({"stage": "driver_execution", "message": execution.get("error_message") or execution.get("reason")})
         except (OSError, ValueError) as exc:
-            metrics = {"action_count": None, "actions_by_type": {}, "actions_by_status": {}}
             errors.append({"stage": "artifact_summary", "message": str(exc)})
             if not status.get("success") and outcome != "cancelled":
                 outcome = "infrastructure_error"
+        (directory / ".agent_request.json").unlink(missing_ok=True)
+        with (directory / "agent.log").open("a", encoding="utf-8") as log:
+            for record in [*service_checks, *process_cleanup, *errors]:
+                log.write(json.dumps(record, ensure_ascii=False) + "\n")
+        if outcome == "infrastructure_error":
+            reason = f"infrastructure_error:{reason}"
         result = {
-            "schema_version": "Emerge.robocasa_episode_result.v1", "benchmark": "RoboCasa",
+            "schema_version": "Emerge.robocasa_episode_result.v1",
+            "episode_key": f"{args.split}/{args.env_name}/seed_{args.seed}",
             "env_name": args.env_name, "split": args.split, "seed": args.seed,
-            "instruction": instruction or status.get("instruction", ""),
-            "success": bool(status.get("success", False)), "outcome": outcome,
-            "termination_reason": reason, "action_steps": status.get("action_steps", 0),
-            "max_action_steps": status.get("max_action_steps"), "environment_status": status,
-            "agent_feedback_rounds": feedback_rounds, "agent_runs": agent_runs, "errors": errors,
-            "process_cleanup": process_cleanup,
-            "service_checks": service_checks, "service_checks_skipped": args.skip_service_checks,
-            "started_at": started_at, "finished_at": datetime.now(timezone.utc).isoformat(),
-            "duration_s": round(time.monotonic()-started, 3), "workspace": str(workspace),
-            **metrics,
+            "instruction": instruction,
+            "success": bool(status.get("success", False)),
+            "termination_reason": reason,
+            "action_steps": int(status.get("action_steps", 0)),
+            "environment_steps": int(status.get("environment_steps", 0)),
+            "max_action_steps": status.get("max_action_steps", args.max_steps),
+            "agent_feedback_rounds": feedback_rounds,
+            "agent_runs_dir": str(directory / "agent_runs"),
+            "duration_s": round(time.monotonic()-started, 3),
+            "started_at": started_at,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "attempt_dir": str(directory),
+            **action_metrics(workspace / "ACTION.md"),
         }
         atomic_json(directory / "result.json", result)
         return result
+
 
 
 def positive_int(value: str) -> int:
@@ -488,7 +486,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--agent-python", default=sys.executable)
     parser.add_argument("--policy-server-url", help="Override the driver's OpenPI service URL")
     parser.add_argument("--skip-service-checks", action="store_true",
-                        help="Skip local model health probes for controlled diagnostics; recorded in result.json")
+                        help="Skip local model health probes for controlled diagnostics; recorded in agent.log")
+    parser.add_argument("--record-video", action=argparse.BooleanOptionalAction, default=True,
+                        help="Save rollout.mp4 from the native left camera (enabled by default)")
     parser.add_argument("--max-steps", type=positive_int, help="Override native registry horizon; all control actions share it")
     parser.add_argument("--max-agent-iterations", type=positive_int, help="Override iterations per headless run")
     parser.add_argument("--max-agent-feedback-rounds", type=nonnegative_int, default=2)
@@ -525,11 +525,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"Output already exists; choose a fresh directory: {directory}")
     print(f"EPISODE {directory}", flush=True)
     result = EpisodeSupervisor(args).run(directory)
-    print(json.dumps({key: result[key] for key in ("success", "outcome", "termination_reason", "action_steps")}, ensure_ascii=False), flush=True)
+    print(json.dumps({key: result[key] for key in ("success", "termination_reason", "action_steps")}, ensure_ascii=False), flush=True)
     print(f"RESULT {directory / 'result.json'}", flush=True)
-    if result["outcome"] == "cancelled":
+    if result["termination_reason"] == "interrupted":
         return 130
-    return 1 if result["outcome"] == "infrastructure_error" else 0
+    return 1 if result["termination_reason"].startswith("infrastructure_error:") else 0
 
 
 if __name__ == "__main__":

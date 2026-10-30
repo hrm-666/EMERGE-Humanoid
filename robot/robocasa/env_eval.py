@@ -3,17 +3,13 @@
 from __future__ import annotations
 
 import importlib
-import json
 import logging
-import os
-from copy import deepcopy
-from datetime import datetime, timezone
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 from typing import Any
 
 import numpy as np
 
+from Emerge.runtime.storage import atomic_json
 from robot.robocasa.env import RoboCasaEnvManager, StepResult
 
 logger = logging.getLogger(__name__)
@@ -30,7 +26,7 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
         *,
         max_action_steps: int | None = None,
         status_path: str | Path | None = None,
-        metadata: dict[str, Any] | None = None,
+        video_path: str | Path | None = None,
         **env_kwargs: Any,
     ) -> None:
         super().__init__(**env_kwargs)
@@ -43,7 +39,8 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
         self.status_path = (
             Path(status_path).expanduser().resolve() if status_path is not None else None
         )
-        self._metadata = deepcopy(metadata or {})
+        self.video_path = Path(video_path).expanduser().resolve() if video_path is not None else None
+        self._video_writer = None
         self._reset_evaluation_state()
 
     @property
@@ -96,11 +93,11 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
         self._require_environment()
         self._validate_seed(seed)
         self._reset_evaluation_state()
-        self._reset_seed = None if seed is None else int(seed)
         # Invalidate the preceding episode even if horizon lookup or reset fails.
         self._clear_observation()
         self._action_steps = 0
         try:
+            self._close_video()
             self._invalidate_published_observation()
             self._write_evaluation_status()
             if self._budget_override is None:
@@ -111,6 +108,7 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
             result = super().reset(seed=seed)
             if super().check_success():
                 self._finish("success")
+            self._record_video()
             self._write_evaluation_status()
             return result
         except Exception as exc:
@@ -125,8 +123,13 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
                 f"RoboCasa evaluation ended ({self._termination_reason}); reset before stepping again"
             )
         self._require_ready()
+        before = self.action_steps
         try:
-            result = super().step(action12, publish_observation=publish_observation)
+            try:
+                result = super().step(action12, publish_observation=publish_observation)
+            finally:
+                if self.action_steps > before and self.is_connected():
+                    self._record_video()
             # Success wins when the final allowed action also reaches the goal.
             if super().check_success():
                 self._finish("success")
@@ -164,33 +167,19 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
         return state
 
     def get_episode_status(self) -> dict[str, Any]:
-        """Return a detached status snapshot, including the last closed episode.
-
-        ``seed`` is the constructor seed; ``reset_seed`` records an explicit
-        reset seed, or None when continuing the environment's RNG stream.
-        """
+        """Live internal status, retained after close for the driver and evaluator."""
         if self._closed_status is not None:
-            return deepcopy(self._closed_status)
+            return dict(self._closed_status)
         return {
-            "schema_version": "Emerge.robocasa_evaluation_status.v1",
             "ready": self.is_connected(),
-            "env_name": self.env_name,
-            "split": self.split,
-            "seed": self.seed,
-            "reset_seed": self._reset_seed,
-            "instruction": self.instruction,
             "success": self._episode_success,
             "done": self._episode_done,
-            "terminated": self._latest_terminated,
-            "truncated": self._latest_truncated,
             "reward": self._latest_reward,
+            "instruction": self.instruction,
             "action_steps": self.action_steps,
             "max_action_steps": self._max_action_steps,
-            "remaining_steps": self.remaining_steps,
-            "budget_source": "task_registry" if self._budget_override is None else "override",
             "termination_reason": self._termination_reason,
             "error_message": self._error_message,
-            "metadata": deepcopy(self._metadata),
         }
 
     def close(self) -> None:
@@ -201,7 +190,10 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
             self._finish("closed")
         snapshot = self.get_episode_status()
         try:
-            super().close()
+            try:
+                self._close_video()
+            finally:
+                super().close()
         except Exception as exc:
             self._record_error(exc)
             snapshot.update(
@@ -217,12 +209,31 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
             # Reporting failures during cleanup must not mask a simulator error.
             self._write_status_safely()
 
+    def _record_video(self) -> None:
+        """Encode native upright RGB; do not render, step, or publish PNG files."""
+        if self.video_path is None:
+            return
+        if self._video_writer is None:
+            import imageio.v2 as imageio
+
+            self.video_path.parent.mkdir(parents=True, exist_ok=True)
+            fps = self._environment.unwrapped.env.control_freq
+            self._video_writer = imageio.get_writer(
+                self.video_path, format="FFMPEG", fps=fps, codec="libx264",
+                macro_block_size=None, output_params=["-movflags", "+faststart"],
+            )
+        self._video_writer.append_data(self.latest_obs["video.robot0_agentview_left"])
+
+    def _close_video(self) -> None:
+        writer, self._video_writer = self._video_writer, None
+        if writer is not None:
+            writer.close()
+
     def _reset_evaluation_state(self) -> None:
         self._episode_done = False
         self._episode_success = False
         self._termination_reason: str | None = None
         self._error_message: str | None = None
-        self._reset_seed: int | None = None
         self._closed_status: dict[str, Any] | None = None
 
     def _finish(self, reason: str) -> None:
@@ -248,21 +259,17 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
         if path is None:
             return
         payload = self.get_episode_status()
-        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary: Path | None = None
-        try:
-            with NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=path.parent,
-                prefix=f".{path.name}.", suffix=".tmp", delete=False,
-            ) as stream:
-                temporary = Path(stream.name)
-                json.dump(payload, stream, ensure_ascii=False, allow_nan=False, indent=2)
-                stream.write("\n")
-            os.replace(temporary, path)
-        finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
+        # Match LIBERO's file format without changing internal status consumers.
+        payload.update(
+            schema_version="Emerge.robocasa_evaluation_status.v1",
+            environment_steps=payload["action_steps"], settling_steps=0,
+            metadata={
+                "env_name": self.env_name, "split": self.split, "seed": self.seed,
+                "instruction": payload.pop("instruction"),
+                "error_message": payload.pop("error_message"),
+            },
+        )
+        atomic_json(path, payload)
 
     def _write_status_safely(self) -> None:
         try:
