@@ -14,8 +14,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-import numpy as np
-
 from robot.robocasa.cameras import RoboCasaCameraFrame
 
 
@@ -63,13 +61,7 @@ class RoboCasaObservationWriter:
 
     def write(self, frames: Mapping[str, RoboCasaCameraFrame]) -> Path:
         """Overwrite current images and then publish their calibration manifest."""
-        selected = []
-        for name in self.camera_names:
-            if name not in frames:
-                raise KeyError(f"observation is missing configured camera {name!r}")
-            frame = frames[name]
-            self._validate_frame(name, frame)
-            selected.append(frame)
+        selected = [frames[name] for name in self.camera_names]
 
         from PIL import Image
 
@@ -114,30 +106,3 @@ class RoboCasaObservationWriter:
         finally:
             temporary_manifest.unlink(missing_ok=True)
         return self.manifest_path
-
-    @staticmethod
-    def _validate_frame(name: str, frame: RoboCasaCameraFrame) -> None:
-        if frame.name != name:
-            raise ValueError(f"camera frame name does not match observation key {name!r}")
-        rgb, intrinsics, transform = frame.rgb, frame.intrinsics, frame.T_world_camera
-        if rgb.ndim != 3 or rgb.shape[2] != 3 or rgb.dtype != np.uint8 or min(rgb.shape[:2]) < 1:
-            raise ValueError(f"camera {name!r} requires a non-empty HWC uint8 RGB image")
-        if (
-            intrinsics.shape != (3, 3)
-            or not np.all(np.isfinite(intrinsics))
-            or intrinsics[0, 0] <= 0
-            or intrinsics[1, 1] <= 0
-            or not np.allclose(intrinsics[2], [0, 0, 1], atol=1e-8)
-        ):
-            raise ValueError(f"camera {name!r} requires valid finite 3x3 intrinsics")
-        if (
-            transform.shape != (4, 4)
-            or not np.all(np.isfinite(transform))
-            or not np.allclose(transform[3], [0, 0, 0, 1], atol=1e-8)
-        ):
-            raise ValueError(f"camera {name!r} requires a finite homogeneous T_world_camera")
-        rotation = transform[:3, :3]
-        if not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-4) or not np.isclose(
-            np.linalg.det(rotation), 1.0, atol=1e-4
-        ):
-            raise ValueError(f"camera {name!r} requires a proper camera rotation")

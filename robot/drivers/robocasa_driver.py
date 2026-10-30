@@ -47,28 +47,14 @@ class RoboCasaDriver(BaseDriver):
             if profile_path is not None else Path("robot/profiles/robocasa.md")
         )
         self._profile_path = (profile if profile.is_absolute() else repository / profile).resolve()
-        native = self._config(robocasa, "robocasa")
-        allowed = {"env_name", "split", "seed", "env_kwargs", "mujoco_gl"}
-        unknown = set(native) - allowed
-        if unknown:
-            raise ValueError(f"unsupported robocasa settings: {', '.join(sorted(unknown))}")
-        if "env_name" not in native:
-            raise ValueError("robocasa.env_name is required")
-        eval_config = self._config(evaluation, "evaluation")
+        native = dict(robocasa or {})
+        eval_config = dict(evaluation or {})
         enabled = eval_config.pop("enabled", False)
-        if not isinstance(enabled, bool):
-            raise ValueError("evaluation.enabled must be a boolean")
-        allowed_eval = {"max_action_steps", "status_path", "metadata"}
-        unknown = set(eval_config) - allowed_eval
-        if unknown:
-            raise ValueError(f"unsupported evaluation settings: {', '.join(sorted(unknown))}")
-        if not enabled and eval_config:
-            raise ValueError("set evaluation.enabled=true to configure episode evaluation")
         common = dict(
             **native,
-            camera_config=self._config(cameras, "cameras"),
+            camera_config=dict(cameras or {}),
             workspace=self._workspace,
-            observation_config=self._config(observation, "observation"),
+            observation_config=dict(observation or {}),
         )
         if enabled:
             status = eval_config.get("status_path", "artifacts/evaluation/status.json")
@@ -78,49 +64,21 @@ class RoboCasaDriver(BaseDriver):
             self._environment = RoboCasaEvalEnvManager(**common, **eval_config)
         else:
             self._environment = RoboCasaEnvManager(**common)
-        self._actions = RoboCasaActionController(
-            self._environment, config=self._config(motion, "motion")
-        )
         self._vla = RoboCasaPolicyExecutor(self._environment, config=vla)
+        self._actions = RoboCasaActionController(
+            self._environment, config=dict(motion or {}), vla_executor=self._vla
+        )
         self._last_execution: dict[str, Any] | None = None
         self._load_error: str | None = None
         self._closed = False
-
-    @staticmethod
-    def _config(value: dict[str, Any] | None, name: str) -> dict[str, Any]:
-        if value is not None and not isinstance(value, dict):
-            raise ValueError(f"{name} must be a JSON object")
-        return deepcopy(value or {})
 
     def get_profile_path(self) -> Path:
         return self._profile_path
 
     def load_scene(self, scene: dict[str, dict]) -> None:
-        """Create the configured task once; workspace annotations do not seed it.
-
-        Reject LIBERO asset declarations explicitly rather than pretending to
-        inject those models. Ordinary perception annotations remain in the
-        workspace and are not passed into the native environment.
-        """
+        """Create the configured task; workspace annotations stay in the workspace."""
         if self._closed:
             raise RuntimeError("RoboCasa driver is closed")
-        if not isinstance(scene, dict) or any(
-            not isinstance(value, dict) for value in scene.values()
-        ):
-            raise ValueError("scene must be an object annotation mapping")
-        asset_keys = {
-            "urdf", "urdf_path", "mjcf", "mjcf_path", "xml_path", "urdf_assets", "mujoco_assets",
-        }
-        if asset_keys.intersection(scene) or any(
-            asset_keys.intersection(value) for value in scene.values()
-        ):
-            raise ValueError(
-                "RoboCasa scene asset injection is unsupported; configure robocasa.env_name instead"
-            )
-        if scene:
-            logger.info(
-                "Keeping %d workspace object annotations; RoboCasa generates its own scene", len(scene)
-            )
         self._last_execution = None
         self._load_error = None
         try:
@@ -139,33 +97,10 @@ class RoboCasaDriver(BaseDriver):
         self._last_execution = None
         if self._closed:
             return "Failed: RoboCasa driver is closed"
-        if action_type not in {"vla_execute", "move_to_pose", "move_linear", "set_gripper"}:
-            return (
-                f"Failed: unsupported RoboCasa action {action_type!r}; "
-                "use vla_execute, move_to_pose, move_linear or set_gripper"
-            )
         if not self._environment.is_connected():
             return "Failed: RoboCasa environment is unavailable; load the configured task first"
         try:
-            if action_type == "vla_execute":
-                if not isinstance(params, dict):
-                    raise ValueError("vla_execute parameters must be an object")
-                unknown = set(params) - {"instruction", "prompt", "step"}
-                if unknown:
-                    raise ValueError(f"unsupported vla_execute parameters: {', '.join(sorted(unknown))}")
-                if (
-                    "instruction" in params and "prompt" in params
-                    and params["instruction"] != params["prompt"]
-                ):
-                    raise ValueError("instruction and prompt must agree when both are supplied")
-                if "step" not in params:
-                    raise ValueError("vla_execute requires a positive integer step")
-                result = self._vla.execute(
-                    params.get("instruction", params.get("prompt")),
-                    step=params["step"], cancel_check=cancel_check,
-                )
-            else:
-                result = self._actions.execute(action_type, params, cancel_check=cancel_check)
+            result = self._actions.execute(action_type, params, cancel_check=cancel_check)
         except Exception as exc:
             return f"Failed: {type(exc).__name__}: {exc}"
         self._last_execution = {"action_type": action_type, **asdict(result)}

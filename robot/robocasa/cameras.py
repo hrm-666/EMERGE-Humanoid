@@ -59,17 +59,9 @@ class _CameraConfig:
 
 
 class RoboCasaCameraManager:
-    """Inject fixed/auto cameras and cache configured calibrated camera views.
-
-    Register with ``install()`` before the manager's first explicit Gym reset.
-    The XML callback then runs on subsequent model rebuilds too. Existing
-    camera names are never overwritten. IDs and poses are read from the current
-    simulation on every refresh, since hard resets replace the compiled model.
-    """
+    """Inject fixed/auto cameras and cache configured calibrated camera views."""
 
     def __init__(self, camera_config: Mapping[str, Mapping[str, Any]] | None = None) -> None:
-        if camera_config is not None and not isinstance(camera_config, Mapping):
-            raise ValueError("camera_config must be a mapping of camera names to settings")
         self._configs = tuple(
             self._parse_config(name, settings)
             for name, settings in (camera_config or {}).items()
@@ -163,8 +155,6 @@ class RoboCasaCameraManager:
         )
         for config in auto:
             camera_id = int(sim.model.camera_name2id(config.name))
-            if camera_id < 0:
-                raise ValueError(f"RoboCasa model is missing auto camera {config.name!r}")
             sim.model.cam_pos[camera_id] = poses[config.name].position_m
             sim.model.cam_quat[camera_id] = poses[config.name].quaternion_wxyz
             sim.model.cam_fovy[camera_id] = config.fovy
@@ -314,21 +304,12 @@ class RoboCasaCameraManager:
         }
 
     def refresh(self, sim: Any, native_obs: Mapping[str, Any]) -> dict[str, RoboCasaCameraFrame]:
-        """Capture a complete set at the current physics state, without stepping.
-
-        Native RGB is reused only at its actual dimensions. A requested size
-        change, or a camera absent from native obs, uses a direct sim render.
-        Any capture failure invalidates the whole frame set to avoid mixed ages.
-        """
+        """Capture a complete set at the current physics state, without stepping."""
         self.clear()
         frames = {}
         for config in self._configs:
             camera_id = int(sim.model.camera_name2id(config.name))
-            if camera_id < 0:
-                raise ValueError(f"RoboCasa model is missing camera {config.name!r}")
             native = native_obs.get(f"video.{config.name}")
-            if native is not None:
-                native = self._rgb_array(native, config.name)
             width = config.width or (native.shape[1] if native is not None else 256)
             height = config.height or (native.shape[0] if native is not None else 256)
             if native is not None and native.shape[:2] == (height, width):
@@ -337,12 +318,8 @@ class RoboCasaCameraManager:
                 rendered = sim.render(
                     camera_name=config.name, width=width, height=height, depth=False
                 )
-                rgb = self._rgb_array(rendered, config.name)[::-1].copy(order="C")
-                if rgb.shape[:2] != (height, width):
-                    raise ValueError(f"camera {config.name!r} rendered an unexpected image size")
+                rgb = rendered[::-1].copy(order="C")
             fovy = float(sim.model.cam_fovy[camera_id])
-            if not np.isfinite(fovy) or not 0.0 < fovy < 180.0:
-                raise ValueError(f"camera {config.name!r} requires a perspective vertical FOV")
             focal = 0.5 * height / np.tan(np.deg2rad(fovy) / 2.0)
             intrinsics = np.array(
                 [[focal, 0.0, width / 2.0], [0.0, focal, height / 2.0], [0.0, 0.0, 1.0]]
@@ -352,8 +329,6 @@ class RoboCasaCameraManager:
                 [1.0, -1.0, -1.0]
             )
             transform[:3, 3] = sim.data.cam_xpos[camera_id]
-            if not np.all(np.isfinite(transform)):
-                raise ValueError(f"camera {config.name!r} has a non-finite world pose")
             for array in (rgb, intrinsics, transform):
                 array.setflags(write=False)
             frames[config.name] = RoboCasaCameraFrame(config.name, rgb, intrinsics, transform)
@@ -369,83 +344,33 @@ class RoboCasaCameraManager:
         self.clear()
         self._rig_region = None
 
-    @staticmethod
-    def _rgb_array(value: Any, name: str) -> np.ndarray:
-        array = np.asarray(value)
-        if (
-            array.ndim != 3
-            or array.shape[2] != 3
-            or array.dtype != np.uint8
-            or min(array.shape[:2]) < 1
-        ):
-            raise ValueError(f"camera {name!r} must provide a non-empty HWC uint8 RGB image")
-        return array
 
-    @classmethod
-    def _parse_config(cls, name: str, settings: Mapping[str, Any]) -> _CameraConfig:
-        if (
-            not isinstance(name, str)
-            or not name
-            or name != name.strip()
-            or name.startswith("video.")
-        ):
-            raise ValueError("camera names must be non-empty MuJoCo names without a video. prefix")
-        if not isinstance(settings, Mapping):
-            raise ValueError(f"camera {name!r} settings must be a mapping")
-        unknown = set(settings) - {"mode", "width", "height", "pos", "quat", "fovy"}
-        if unknown:
-            raise ValueError(
-                f"camera {name!r} has unsupported settings: {', '.join(sorted(unknown))}"
-            )
+
+    @staticmethod
+    def _parse_config(name: str, settings: Mapping[str, Any]) -> _CameraConfig:
         mode = settings.get("mode", "existing")
-        if not isinstance(mode, str) or mode not in {"existing", "fixed", "auto"}:
-            raise ValueError(
-                f"camera {name!r} mode must be existing, fixed or auto"
-            )
-        dimensions = []
-        for key in ("width", "height"):
-            value = settings.get(key)
-            if value is not None and (
-                isinstance(value, (bool, np.bool_))
-                or not isinstance(value, (int, np.integer))
-                or value <= 0
-            ):
-                raise ValueError(f"camera {name!r} {key} must be a positive integer")
-            dimensions.append(None if value is None else int(value))
+        if mode not in {"existing", "fixed", "auto"}:
+            raise ValueError(f"camera {name!r} mode must be existing, fixed or auto")
+        width, height = settings.get("width"), settings.get("height")
+        if any(value is not None and (not isinstance(value, int) or isinstance(value, bool) or value <= 0)
+               for value in (width, height)):
+            raise ValueError("camera dimensions must be positive integers")
         if mode == "existing":
-            if {"pos", "quat", "fovy"}.intersection(settings):
-                raise ValueError(f"existing camera {name!r} cannot override model pose or FOV")
-            return _CameraConfig(name, mode, *dimensions)
+            return _CameraConfig(name, mode, width, height)
         pos = quat = None
         if mode == "auto":
-            if {"pos", "quat"}.intersection(settings):
-                raise ValueError(f"auto camera {name!r} pose is determined by the shared rig")
-            if any(value is None for value in dimensions):
-                raise ValueError(f"auto camera {name!r} requires width and height")
+            if width is None or height is None:
+                raise ValueError("auto cameras require width and height")
         else:
-            pos = cls._vector(settings.get("pos"), 3, f"{name}.pos")
-            quat = cls._vector(settings.get("quat"), 4, f"{name}.quat (WXYZ)")
-        if quat is not None:
-            norm = float(np.linalg.norm(quat))
-            if not np.isfinite(norm) or norm == 0.0:
-                raise ValueError(f"camera {name!r} requires a nonzero finite quaternion")
-            quat = tuple(value / norm for value in quat)
-        raw_fovy = settings.get("fovy", 62.0)
-        if isinstance(raw_fovy, (bool, np.bool_)) or not np.isscalar(raw_fovy):
-            raise ValueError(f"camera {name!r} fovy must be a finite number between 0 and 180")
-        fovy = float(raw_fovy)
-        if not np.isfinite(fovy) or not 0.0 < fovy < 180.0:
-            raise ValueError(f"camera {name!r} fovy must be a finite number between 0 and 180")
-        return _CameraConfig(name, mode, *dimensions, pos, quat, fovy)
+            from robot.mujoco_simulation.pose_utils import PoseUtils
 
-    @staticmethod
-    def _vector(value: Any, length: int, label: str) -> tuple[float, ...]:
-        array = np.asarray(value)
-        if (
-            array.shape != (length,)
-            or not np.issubdtype(array.dtype, np.number)
-            or np.iscomplexobj(array)
-            or not np.all(np.isfinite(array))
-        ):
-            raise ValueError(f"{label} must contain {length} finite real values")
-        return tuple(float(item) for item in array)
+            pos = tuple(PoseUtils.vector(settings["pos"], name="camera.pos"))
+            quaternion = PoseUtils.vector(settings["quat"], name="camera.quat (WXYZ)", length=4)
+            norm = np.linalg.norm(quaternion)
+            if norm <= 1e-12:
+                raise ValueError("camera quaternion must be nonzero")
+            quat = tuple(quaternion / norm)
+        fovy = float(settings.get("fovy", 62.0))
+        if not 0 < fovy < 180:
+            raise ValueError("camera fovy must be between 0 and 180 degrees")
+        return _CameraConfig(name, mode, width, height, pos, quat, fovy)

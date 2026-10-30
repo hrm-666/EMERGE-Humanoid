@@ -27,21 +27,8 @@ StepResult = tuple[dict[str, Any], float, bool, bool, dict[str, Any]]
 class RoboCasaEnvManager:
     """Own one PandaOmron Gym environment without benchmark stop policies.
 
-    ``create()`` follows the existing OpenPI RoboCasa evaluation entrypoint:
-    ``gym.make(..., seed=seed)`` followed by one explicit ``reset()``. The Gym
-    wrapper also resets internally during construction. No settling actions or
-    repeated seeding are added here.
-
-    Native terminated/truncated flags are preserved. Task success alone does
-    not stop this debug-capable base class. Horizon enforcement, latched episode
-    success and evaluation status files belong in RoboCasaEvalEnvManager in
-    env_eval.py. Driver-level adaptation to EMERGE belongs in the driver.
-
-    Optional existing/fixed/auto camera configurations add calibrated frame
-    caches. They never add keys to latest_obs or alter native policy images.
-    File output is off by default. To enable it, supply workspace and
-    observation_config={"enabled": True, "reference_view": "<configured name>"}.
-    Optional camera_names selects a subset of configured cameras to publish.
+    Like OpenPI evaluation, create() calls gym.make(seed=...) then reset() once.
+    Gym construction also resets internally; no extra settling actions are added.
     """
 
     def __init__(
@@ -65,11 +52,6 @@ class RoboCasaEnvManager:
         self.split = split
         self.seed = None if seed is None else int(seed)
         self.env_kwargs = deepcopy(env_kwargs or {})
-        reserved = {"env_name", "split", "seed"}.intersection(self.env_kwargs)
-        if reserved:
-            raise ValueError(
-                f"pass {', '.join(sorted(reserved))} as constructor arguments, not env_kwargs"
-            )
         self.mujoco_gl = mujoco_gl
         self._camera_manager = RoboCasaCameraManager(camera_config)
         self._observation_writer = self._make_observation_writer(workspace, observation_config)
@@ -174,16 +156,10 @@ class RoboCasaEnvManager:
         return self._latest_obs, dict(self._latest_info)
 
     def step(self, action12: Any, *, publish_observation: bool = True) -> StepResult:
-        """Execute one policy-format action without clipping or re-encoding it.
+        """Apply xyz(3), rotation(3), gripper(1), base(3), torso(1), mode(1).
 
-        Ordering is xyz(3), rotation(3), gripper(1), base(3), torso(1), mode(1).
-        RoboCasa's converter and Gym wrapper retain responsibility for gripper
-        and control-mode thresholds. This method returns Gym's five values.
-
-        publish_observation refreshes camera caches and, if enabled, writes a
-        snapshot. False invalidates the caches while retaining the last published
-        files until refresh_cameras(). Capture/write errors occur after the action
-        was applied and counted; callers must not retry it as if it never executed.
+        publish_observation=False skips perception capture, not the native obs.
+        Publication failures happen after the applied action has been counted.
         """
         environment = self._require_ready()
         if self._latest_terminated or self._latest_truncated:
@@ -196,8 +172,6 @@ class RoboCasaEnvManager:
             or not np.all(np.isfinite(action))
         ):
             raise ValueError("RoboCasa action must be a vector of exactly 12 finite real values")
-        if self._convert_action is None:
-            raise RuntimeError("RoboCasa action converter is not initialized")
         gripper_close = bool(action[6] >= 0.5)
         action_dict = self._convert_action(action.copy())
         self._camera_manager.clear()
@@ -242,37 +216,25 @@ class RoboCasaEnvManager:
         treated as a calibrated site transform for future geometric controllers.
         """
         return (
-            self._observation_vector("state.end_effector_position_relative", 3),
-            self._observation_vector("state.end_effector_rotation_relative", 4),
+            self._observation_vector("state.end_effector_position_relative"),
+            self._observation_vector("state.end_effector_rotation_relative"),
         )
 
     def get_base_pose(self) -> tuple[np.ndarray, np.ndarray]:
         """Return the mobile base center's world position and XYZW quaternion."""
         return (
-            self._observation_vector("state.base_position", 3),
-            self._observation_vector("state.base_rotation", 4),
+            self._observation_vector("state.base_position"),
+            self._observation_vector("state.base_rotation"),
         )
 
     def get_eef_pose_world(self) -> tuple[np.ndarray, np.ndarray]:
-        """Return the grip site's world position and XYZW quaternion, as copies.
+        """Return the current grip site's world position and XYZW orientation."""
+        from scipy.spatial.transform import Rotation
 
-        Both components come from the same current MuJoCo site. Resolve the
-        robot on each call: a hard reset can replace robots, controllers and IDs.
-        This read neither updates controller goals nor advances simulation.
-        """
         site_id = self._right_robot().eef_site_id["right"]
-        if (
-            isinstance(site_id, (bool, np.bool_))
-            or not isinstance(site_id, (int, np.integer))
-            or not 0 <= site_id < len(self.sim.data.site_xpos)
-        ):
-            raise RuntimeError("EEF grip site ID is invalid in the current model")
-        transform = self._pose_transform(
-            self.sim.data.site_xpos[site_id],
-            np.asarray(self.sim.data.site_xmat[site_id]).reshape(3, 3),
-            "EEF grip site",
-        )
-        return transform[:3, 3].copy(), self._rotation_to_quaternion(transform[:3, :3])
+        position = self.sim.data.site_xpos[site_id].copy()
+        rotation = self.sim.data.site_xmat[site_id].reshape(3, 3)
+        return position, Rotation.from_matrix(rotation).as_quat()
 
     def get_arm_control_frame(self) -> np.ndarray:
         """Return T_world_control, the right arm's base reference in world.
@@ -283,56 +245,28 @@ class RoboCasaEnvManager:
         """
         composite = self._right_robot().composite_controller
         position, rotation = composite.get_controller_base_pose("right")
-        return self._pose_transform(position, rotation, "right arm control frame")
+        return self._pose_transform(position, rotation)
 
     def get_arm_control_spec(self) -> dict[str, Any]:
-        """Return detached JSON-compatible limits for fixed-impedance delta OSC.
-
-        Validate on demand so unsupported geometric control modes do not alter
-        native environment construction or VLA stepping. Limits are per-axis
-        controller values, not assumed 0.05 m / 0.5 rad defaults. The control
-        frame describes the base origin even when input_ref_frame is 'world'.
-        """
-        robot = self._right_robot()
-        controller = robot.composite_controller.part_controllers["right"]
-        if (
-            controller.name != "OSC_POSE"
-            or controller.control_dim != 6
-            or controller.impedance_mode != "fixed"
-            or controller.input_type != "delta"
-            or controller.input_ref_frame not in {"base", "world"}
-        ):
-            raise RuntimeError(
-                "geometric control requires a 6-D fixed-impedance delta OSC_POSE "
-                "controller with base or world inputs"
-            )
-        site_name = controller.ref_name
-        if (
-            not isinstance(site_name, str)
-            or self.sim.model.site_name2id(site_name) != robot.eef_site_id["right"]
-        ):
-            raise RuntimeError("right arm controller reference must match the EEF grip site")
-        limits = {}
-        for key in ("input_min", "input_max", "output_min", "output_max"):
-            value = np.asarray(getattr(controller, key), dtype=np.float64)
-            if value.shape != (6,) or not np.all(np.isfinite(value)):
-                raise ValueError(f"right arm controller {key} must contain 6 finite values")
-            limits[key] = value
-        for prefix in ("input", "output"):
-            if np.any(limits[f"{prefix}_min"] >= limits[f"{prefix}_max"]):
-                raise ValueError(f"right arm controller {prefix} ranges must be strictly increasing")
+        """Read the live right-arm OSC limits; VLA does not use this adapter."""
+        controller = self._right_robot().composite_controller.part_controllers["right"]
+        if ((controller.name, controller.impedance_mode, controller.input_type)
+                != ("OSC_POSE", "fixed", "delta") or controller.control_dim != 6
+                or controller.input_ref_frame not in {"base", "world"}):
+            raise RuntimeError("geometric control requires fixed-impedance delta OSC_POSE")
         return {
             "controller_type": controller.name,
             "input_type": controller.input_type,
             "input_ref_frame": controller.input_ref_frame,
             "impedance_mode": controller.impedance_mode,
             "control_dim": int(controller.control_dim),
-            "eef_site_name": site_name,
-            **{key: value.tolist() for key, value in limits.items()},
+            "eef_site_name": controller.ref_name,
+            **{key: np.array(getattr(controller, key), dtype=float, copy=True)
+               for key in ("input_min", "input_max", "output_min", "output_max")},
         }
 
     def get_gripper_qpos(self) -> np.ndarray:
-        return self._observation_vector("state.gripper_qpos", 2)
+        return self._observation_vector("state.gripper_qpos")
 
     def get_camera_image(self, camera_name: str) -> np.ndarray:
         """Return a configured camera's RGB, or an unconfigured native Gym image.
@@ -359,7 +293,6 @@ class RoboCasaEnvManager:
 
         The controller must call this synchronously with respect to reset/step.
         With output enabled, publish the complete cache through the writer.
-        Publication errors preserve the previous complete files for this episode.
         """
         self._require_ready()
         # Keep the unconfigured path independent of simulator camera APIs.
@@ -432,30 +365,18 @@ class RoboCasaEnvManager:
             environment.close()
 
     def _make_observation_writer(
-        self, workspace: str | Path | None, config: dict[str, Any] | None
+        self, workspace: str | Path | None, config: dict[str, Any] | None,
     ) -> RoboCasaObservationWriter | None:
-        if config is not None and not isinstance(config, dict):
-            raise ValueError("observation_config must be a mapping")
         config = dict(config or {})
-        unknown = set(config) - {"enabled", "reference_view", "camera_names"}
-        if unknown:
-            raise ValueError(f"unsupported observation settings: {', '.join(sorted(unknown))}")
-        enabled = config.get("enabled", False)
-        if not isinstance(enabled, bool):
-            raise ValueError("observation enabled must be a boolean")
-        if not enabled:
+        if not config.get("enabled", False):
             return None
         if workspace is None:
             raise ValueError("workspace is required when observation output is enabled")
-        writer = RoboCasaObservationWriter(
+        return RoboCasaObservationWriter(
             workspace,
             camera_names=config.get("camera_names", self._camera_manager.names),
-            reference_view=config.get("reference_view", ""),
+            reference_view=config["reference_view"],
         )
-        unknown_cameras = set(writer.camera_names) - set(self._camera_manager.names)
-        if unknown_cameras:
-            raise ValueError(f"observation cameras are not configured: {', '.join(sorted(unknown_cameras))}")
-        return writer
 
     def _invalidate_published_observation(self) -> None:
         """Remove stale scene publication before rebuilding or after invalid physics."""
@@ -473,49 +394,14 @@ class RoboCasaEnvManager:
         self._last_gripper_close: bool | None = None
 
     def _right_robot(self) -> Any:
-        """Resolve the current single-robot PandaOmron adapter, without caching."""
-        robots = self._require_ready().unwrapped.robots
-        if len(robots) != 1 or "right" not in robots[0].arms:
-            raise RuntimeError("RoboCasa geometry access requires one robot with a right arm")
-        return robots[0]
+        return self._require_ready().unwrapped.robots[0]
 
     @staticmethod
-    def _pose_transform(position: Any, rotation: Any, source: str) -> np.ndarray:
-        position = np.asarray(position, dtype=np.float64)
-        rotation = np.asarray(rotation, dtype=np.float64)
-        if position.shape != (3,) or not np.all(np.isfinite(position)):
-            raise ValueError(f"{source} must have a finite 3-D position")
-        if (
-            rotation.shape != (3, 3)
-            or not np.all(np.isfinite(rotation))
-            or not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-6)
-            or not np.isclose(np.linalg.det(rotation), 1.0, atol=1e-6)
-        ):
-            raise ValueError(f"{source} must have a proper 3x3 rotation")
+    def _pose_transform(position: Any, rotation: Any) -> np.ndarray:
         transform = np.eye(4)
         transform[:3, :3] = rotation
         transform[:3, 3] = position
         return transform
-
-    @staticmethod
-    def _rotation_to_quaternion(rotation: np.ndarray) -> np.ndarray:
-        """Convert a validated rotation to XYZW, including rotations near pi.
-
-        The principal eigenvector avoids a trace-only division at 180 degrees.
-        Keep this NumPy-only so reading geometry does not import model packages.
-        """
-        (xx, xy, xz), (yx, yy, yz), (zx, zy, zz) = rotation
-        matrix = np.array([
-            [xx - yy - zz, xy + yx, xz + zx, zy - yz],
-            [xy + yx, yy - xx - zz, yz + zy, xz - zx],
-            [xz + zx, yz + zy, zz - xx - yy, yx - xy],
-            [zy - yz, xz - zx, yx - xy, xx + yy + zz],
-        ]) / 3.0
-        eigenvalues, eigenvectors = np.linalg.eigh(matrix)
-        quaternion = eigenvectors[:, np.argmax(eigenvalues)].copy()
-        if quaternion[3] < 0:
-            quaternion = -quaternion
-        return quaternion
 
     def _store_result(
         self,
@@ -543,14 +429,9 @@ class RoboCasaEnvManager:
             raise RuntimeError("RoboCasa observation is unavailable; reset the environment")
         return environment
 
-    def _observation_vector(self, key: str, length: int) -> np.ndarray:
+    def _observation_vector(self, key: str) -> np.ndarray:
         self._require_ready()
-        if key not in self._latest_obs:
-            raise KeyError(f"RoboCasa observation is missing {key!r}")
-        value = np.asarray(self._latest_obs[key], dtype=np.float64)
-        if value.shape != (length,) or not np.all(np.isfinite(value)):
-            raise ValueError(f"RoboCasa observation {key!r} must contain {length} finite values")
-        return value.copy()
+        return np.array(self._latest_obs[key], dtype=np.float64, copy=True)
 
     @staticmethod
     def _validate_seed(seed: int | None) -> None:

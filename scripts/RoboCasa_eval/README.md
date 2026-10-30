@@ -31,7 +31,7 @@ python -B scripts/RoboCasa_eval/eval_robocasa_agent.py \
 
 ## 执行流程
 
-1. 校验配置，创建本次任务的 workspace、初始文档和独立 driver 配置。
+1. 创建本次任务的 workspace、初始文档和独立 driver 配置，由 Controller 加载配置。
 2. 直接检查 OpenPI、VGGT、SAM3 的 `/healthz`；依赖缺失时记录基础设施错误并退出。通过后，用 RoboCasa Python 启动 `robot.controller --driver robocasa`，安装 profile 并创建原生环境。
 3. 等待私有状态、`robots.robocasa`、profile 和初始相机观测就绪，从环境获取原始任务指令及预算。
 4. 用 EmergePolicy Python 启动现有 headless runtime。主 agent 自主规划、调用子代理并执行几何/VLA 动作；启动器不预写任务动作序列。
@@ -58,7 +58,6 @@ RoboCasa 保留 `gym.make(seed=...)` 及既有 reset 流程，不引入 LIBERO �
 
 ```text
 <output-dir>/
-  episode.json          # 任务与启动配置，不含 API 凭据
   driver_config.json    # 本次仿真配置
   status.json           # Controller 写入的官方环境状态，位于 agent workspace 之外
   result.json           # 启动器最终结果

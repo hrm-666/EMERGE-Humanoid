@@ -9,8 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable, Mapping
-from copy import deepcopy
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -24,16 +23,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class RoboCasaVLAResult:
-    """One executor call, with task success separate from request completion.
-
-    completed means the requested steps finished or the goal was reached.
-    task_success is the environment's success signal, including its evaluation
-    latch when applicable. Exhausting a call's steps alone is not task success.
-    total_steps counts completed Gym steps, also when later status I/O raises.
-    last_gripper_command retains raw action12[6], before RoboCasa's threshold.
-    observation_error reports a final publication failure alongside any primary
-    execution error or cancellation. No action is automatically retried.
-    """
+    """One executor call, with task success separate from request completion."""
 
     completed: bool
     task_success: bool
@@ -58,15 +48,8 @@ class _Progress:
 class RoboCasaPolicyExecutor:
     """Observe, infer and execute bounded action chunks without resetting the env.
 
-    Config supports server_url, timeout (passed to Pi05Client), resize_size
-    (224), replan_steps (5), publish_every_n_steps (defaults to replan_steps),
-    stop_on_success (True), and base/wrist/right_image_key overrides. Publication
-    runs periodically and once on return if there are unpublished actions.
-
-    Calls are synchronous. Cancellation is checked before inference and before
-    every action, including immediately after inference returns; it cannot abort
-    an in-flight client.infer(). Pi05Client's timeout does not impose an RPC
-    deadline. An injected client is borrowed and is never closed here.
+    Cancellation is checked before inference and each action, but cannot abort
+    an in-flight infer() call. The client timeout is not an RPC deadline.
     """
 
     _IMAGES = (
@@ -83,45 +66,17 @@ class RoboCasaPolicyExecutor:
     )
 
     def __init__(
-        self,
-        environment: RoboCasaEnvManager,
-        *,
-        config: dict[str, Any] | None = None,
-        client: Any | None = None,
+        self, environment: RoboCasaEnvManager, *,
+        config: dict[str, Any] | None = None, client: Any | None = None,
     ) -> None:
         self._environment = environment
-        if config is not None and not isinstance(config, dict):
-            raise ValueError("RoboCasa VLA config must be a mapping")
-        self.config = deepcopy(config or {})
-        allowed = {
-            "server_url", "timeout", "resize_size", "replan_steps",
-            "publish_every_n_steps", "stop_on_success",
-            *(item[0] for item in self._IMAGES),
-        }
-        unknown = set(self.config) - allowed
-        if unknown:
-            raise ValueError(f"unsupported RoboCasa VLA settings: {', '.join(sorted(unknown))}")
+        self.config = dict(config or {})
         self.resize_size = self._positive_int(self.config.get("resize_size", 224), "resize_size")
         self.replan_steps = self._positive_int(self.config.get("replan_steps", 5), "replan_steps")
         self.publish_every_n_steps = self._positive_int(
             self.config.get("publish_every_n_steps", self.replan_steps), "publish_every_n_steps"
         )
         self.stop_on_success = self.config.get("stop_on_success", True)
-        if not isinstance(self.stop_on_success, bool):
-            raise ValueError("stop_on_success must be a boolean")
-        for config_key, default, _ in self._IMAGES:
-            value = self.config.get(config_key, default)
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError(f"{config_key} must be a non-empty observation key")
-        self._server_url = self.config.get("server_url", "ws://localhost:8000")
-        if not isinstance(self._server_url, str) or not self._server_url.strip():
-            raise ValueError("server_url must be non-empty")
-        raw_timeout = self.config.get("timeout", 120.0)
-        if isinstance(raw_timeout, (bool, np.bool_)) or not np.isscalar(raw_timeout):
-            raise ValueError("timeout must be a positive finite number")
-        self._timeout = float(raw_timeout)
-        if not np.isfinite(self._timeout) or self._timeout <= 0:
-            raise ValueError("timeout must be a positive finite number")
         self._client = client
         self._owns_client = client is None
         self._closed = False
@@ -194,14 +149,6 @@ class RoboCasaPolicyExecutor:
             raise ValueError("RoboCasa policy instruction must be a non-empty string")
         health_checked = False
         while True:
-            progress.stage = "environment_state"
-            stopped = self._stop_status()
-            if stopped is not None:
-                return stopped
-            progress.stage = "cancel_check"
-            cancellation = cancel_check() if cancel_check else None
-            if cancellation:
-                return False, "interrupted", cancellation
             progress.stage = "preprocess"
             element = self._build_element(instruction)
             progress.stage = "health_check"
@@ -235,10 +182,6 @@ class RoboCasaPolicyExecutor:
             if remaining is not None:
                 execute_count = min(execute_count, remaining)
             for action in chunk[:execute_count]:
-                progress.stage = "environment_state"
-                stopped = self._stop_status()
-                if stopped is not None:
-                    return stopped
                 progress.stage = "cancel_check"
                 cancellation = cancel_check() if cancel_check else None
                 if cancellation:
@@ -256,8 +199,6 @@ class RoboCasaPolicyExecutor:
                         progress.steps += delta
                         progress.last_gripper = float(action[6])
                         progress.dirty = True
-                if delta != 1:
-                    raise RuntimeError("RoboCasa step did not increment its action counter exactly once")
                 progress.stage = "environment_state"
                 stopped = self._stop_status(terminated, truncated)
                 if stopped is not None:
@@ -295,54 +236,36 @@ class RoboCasaPolicyExecutor:
 
     def _build_element(self, instruction: str) -> dict[str, Any]:
         obs = self._environment.latest_obs
-        vectors = []
-        for key, length in self._STATE:
-            value = np.asarray(obs[key])
-            if (
-                value.shape != (length,) or not np.issubdtype(value.dtype, np.number)
-                or np.iscomplexobj(value) or not np.all(np.isfinite(value))
-            ):
-                raise ValueError(f"RoboCasa state {key!r} must contain {length} finite real values")
-            vectors.append(value)
-        # Preserve the baseline ordering and native state precision/quaternions.
-        element = {"observation/state": np.concatenate(vectors), "prompt": instruction}
+        element = {
+            "observation/state": np.concatenate([obs[key] for key, _ in self._STATE]),
+            "prompt": instruction,
+        }
         for config_key, default, output_key in self._IMAGES:
             element[output_key] = self._prepare_image(obs[self.config.get(config_key, default)])
         return element
 
-    def _prepare_image(self, value: Any) -> np.ndarray:
+    def _prepare_image(self, image: Any) -> np.ndarray:
         from openpi_client import image_tools
 
-        image = np.asarray(value)
-        if (
-            image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8
-            or min(image.shape[:2]) < 1
-        ):
-            raise ValueError("RoboCasa native policy images must be non-empty HWC uint8 RGB")
-        # Gym already flipped RGB upright; the RoboCasa baseline adds no rotation.
-        image = image_tools.resize_with_pad(
-            np.ascontiguousarray(image), self.resize_size, self.resize_size
-        )
-        return image_tools.convert_to_uint8(image).copy(order="C")
+        # Native Gym RGB is already upright; RoboCasa adds no LIBERO rotation.
+        resized = image_tools.resize_with_pad(image, self.resize_size, self.resize_size)
+        return np.ascontiguousarray(image_tools.convert_to_uint8(resized))
 
     @staticmethod
     def _action_chunk(result: Any) -> np.ndarray:
-        if not isinstance(result, Mapping) or "actions" not in result:
-            raise ValueError("OpenPI result must contain actions")
         chunk = np.asarray(result["actions"])
-        if (
-            chunk.ndim != 2 or chunk.shape[0] == 0 or chunk.shape[1] != 12
-            or not np.issubdtype(chunk.dtype, np.number) or np.iscomplexobj(chunk)
-            or not np.all(np.isfinite(chunk))
-        ):
-            raise ValueError(f"OpenPI actions must have non-empty shape (N, 12) and finite real values; got {chunk.shape}")
+        if chunk.ndim != 2 or not len(chunk) or chunk.shape[1] != 12:
+            raise ValueError(f"OpenPI actions must have non-empty shape (N, 12), got {chunk.shape}")
         return chunk
 
     def _get_client(self) -> Any:
         if self._client is None:
             from robot.vla.openpi_bridge import Pi05Client
 
-            self._client = Pi05Client(self._server_url, timeout=self._timeout)
+            self._client = Pi05Client(
+                self.config.get("server_url", "ws://localhost:8000"),
+                timeout=float(self.config.get("timeout", 120.0)),
+            )
         return self._client
 
     def close(self) -> None:

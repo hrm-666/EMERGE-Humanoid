@@ -36,7 +36,6 @@ from robot.mujoco_simulation.scene_io import (
     default_robot_state_doc, load_robot_state_doc, save_robot_state_doc,
 )
 
-STATUS_SCHEMA = "Emerge.robocasa_evaluation_status.v1"
 EVALUATION_RULES = """## RoboCasa Evaluation Rules
 
 Complete the supplied task autonomously through execute_robot_action.
@@ -62,26 +61,12 @@ def read_json(path: Path) -> dict[str, Any]:
     return value
 
 
-def read_status(path: Path, args: argparse.Namespace) -> dict[str, Any]:
-    """A missing publication is transient; an incompatible publication is an error."""
+def read_status(path: Path) -> dict[str, Any]:
+    """Read the private controller status; no publication means not ready yet."""
     try:
         status = read_json(path)
     except FileNotFoundError:
         return {}
-    if status.get("schema_version") != STATUS_SCHEMA:
-        raise ValueError("Unexpected RoboCasa evaluation status schema")
-    for key, expected in (("env_name", args.env_name), ("split", args.split), ("seed", args.seed)):
-        if status.get(key) != expected:
-            raise ValueError(f"Evaluation status does not match episode {key}")
-    for key in ("ready", "done", "success"):
-        if type(status.get(key)) is not bool:
-            raise ValueError(f"Evaluation status {key} must be boolean")
-    for key in ("action_steps", "max_action_steps"):
-        value = status.get(key)
-        if key == "max_action_steps" and value is None:
-            continue
-        if type(value) is not int or value < (1 if key == "max_action_steps" else 0):
-            raise ValueError(f"Evaluation status {key} is invalid")
     return status
 
 
@@ -117,16 +102,8 @@ def prepare_episode(args: argparse.Namespace, directory: Path) -> Path:
         **(evaluation.get("metadata") or {}), "episode_id": directory.name,
         "env_name": args.env_name, "split": args.split, "seed": args.seed,
     }
-    # Validate the assembled driver without importing RoboCasa or allocating physics.
-    from robot.drivers import load_driver
-    driver = load_driver("robocasa", workspace=workspace, **config)
-    try:
-        if not driver.get_profile_path().is_file():
-            raise ValueError(f"Embodiment profile does not exist: {driver.get_profile_path()}")
-        if not config.get("observation", {}).get("enabled"):
-            raise ValueError("agent evaluation requires observation.enabled=true")
-    finally:
-        driver.close()
+    if not config.get("observation", {}).get("enabled"):
+        raise ValueError("agent evaluation requires observation.enabled=true")
     workspace.mkdir()
     sync_workspace_templates(workspace, silent=True)
     agents = workspace / "AGENTS.md"
@@ -136,12 +113,6 @@ def prepare_episode(args: argparse.Namespace, directory: Path) -> Path:
     save_robot_state_doc(workspace / "ROBOT_STATE.md", state)
     atomic_text(workspace / "ACTION.md", "")
     atomic_json(directory / "driver_config.json", config)
-    atomic_json(directory / "episode.json", {
-        "schema_version": "Emerge.robocasa_episode_spec.v1", **state["task"],
-        "agent_config": str(args.agent_config), "controller_python": args.controller_python,
-        "agent_python": args.agent_python, "episode_timeout_s": args.episode_timeout_s,
-        "max_agent_feedback_rounds": args.max_agent_feedback_rounds,
-    })
     return workspace
 
 
@@ -301,7 +272,7 @@ class EpisodeSupervisor:
         deadline = time.monotonic()+self.args.ready_timeout_s
         while True:
             self.check_interrupted()
-            status = read_status(directory / "status.json", self.args)
+            status = read_status(directory / "status.json")
             terminal = terminal_outcome(status)
             if terminal and terminal[0] == "infrastructure_error":
                 raise EpisodeError("initialization_error", status.get("error_message") or terminal[1],
@@ -363,9 +334,7 @@ class EpisodeSupervisor:
                     request = result_path = None
                     while True:
                         self.check_interrupted()
-                        status = read_status(directory / "status.json", args)
-                        if not status:
-                            raise EpisodeError("status_unavailable", "Environment status disappeared after readiness", "environment_execution")
+                        status = read_status(directory / "status.json")
                         terminal = terminal_outcome(status)
                         if terminal:
                             outcome, reason = terminal
@@ -390,7 +359,7 @@ class EpisodeSupervisor:
                             agent_runs[-1].update(returncode=agent.returncode, run_status=result.run_status,
                                                   finish_reason=result.finish_reason, usage=result.usage)
                             # Read again after exit so a final successful action wins.
-                            status = read_status(directory / "status.json", args)
+                            status = read_status(directory / "status.json")
                             terminal = terminal_outcome(status)
                             if terminal:
                                 outcome, reason = terminal
@@ -433,7 +402,7 @@ class EpisodeSupervisor:
         # Cleanup may close an unfinished environment, but must not replace the
         # actual stop reason with 'closed' or discard the final applied action.
         try:
-            final = read_status(directory / "status.json", args)
+            final = read_status(directory / "status.json")
             if final:
                 status = final
         except (OSError, ValueError) as exc:

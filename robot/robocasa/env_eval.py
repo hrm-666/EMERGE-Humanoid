@@ -22,40 +22,18 @@ logger = logging.getLogger(__name__)
 class RoboCasaEvalEnvManager(RoboCasaEnvManager):
     """Enforce one episode's budget without changing native Gym return values.
 
-    Check ``episode_done`` in addition to the returned terminated/truncated
-    flags: success and evaluation budget exhaustion need not terminate the
-    underlying simulator. Completed episodes reject further actions until reset.
-
-    The default horizon is resolved lazily from RoboCasa's task registry during
-    reset. An explicit override is recorded as such in the evaluation status.
-    No extra simulator resets, settling actions or automatic reseeding are added.
+    Success and budget exhaustion set episode_done; check it alongside Gym flags.
     """
 
     def __init__(
         self,
         *,
-        env_name: str,
-        split: str | None = "target",
-        seed: int | None = None,
-        env_kwargs: dict[str, Any] | None = None,
-        mujoco_gl: str = "egl",
-        camera_config: dict[str, dict[str, Any]] | None = None,
-        workspace: str | Path | None = None,
-        observation_config: dict[str, Any] | None = None,
         max_action_steps: int | None = None,
         status_path: str | Path | None = None,
         metadata: dict[str, Any] | None = None,
+        **env_kwargs: Any,
     ) -> None:
-        super().__init__(
-            env_name=env_name,
-            split=split,
-            seed=seed,
-            env_kwargs=env_kwargs,
-            mujoco_gl=mujoco_gl,
-            camera_config=camera_config,
-            workspace=workspace,
-            observation_config=observation_config,
-        )
+        super().__init__(**env_kwargs)
         if max_action_steps is not None:
             self._validate_budget(max_action_steps)
         self._budget_override = (
@@ -66,8 +44,6 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
             Path(status_path).expanduser().resolve() if status_path is not None else None
         )
         self._metadata = deepcopy(metadata or {})
-        # Fail before allocating a simulator if status cannot represent metadata.
-        json.dumps(self._metadata, allow_nan=False)
         self._reset_evaluation_state()
 
     @property
@@ -149,10 +125,6 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
                 f"RoboCasa evaluation ended ({self._termination_reason}); reset before stepping again"
             )
         self._require_ready()
-        if self.remaining_steps == 0:
-            self._finish("max_action_steps")
-            self._write_evaluation_status()
-            raise RuntimeError("RoboCasa evaluation budget exhausted; reset before stepping again")
         try:
             result = super().step(action12, publish_observation=publish_observation)
             # Success wins when the final allowed action also reaches the goal.
@@ -180,12 +152,7 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
         return self._episode_success
 
     def get_robot_state(self) -> dict[str, Any]:
-        """Add evaluation completion and budget to the live robot summary.
-
-        done follows episode_done, success is latched, and terminated/truncated
-        remain native Gym flags. After close(), use get_episode_status() for
-        the retained final snapshot; live robot observations are unavailable.
-        """
+        """Add evaluation completion and budget to the live robot summary."""
         state = super().get_robot_state()
         state.update(
             done=self._episode_done,

@@ -1,7 +1,7 @@
-"""World-frame geometric actions through RoboCasa's native action12 interface.
+"""Dispatch geometric and VLA actions through RoboCasa's action12 interface.
 
-This layer servos the grip site; it does not plan collision-free paths or move
-the base/torso intentionally. It borrows the environment and never resets it.
+Geometric actions servo the grip site without planning collision-free paths or
+moving the base/torso intentionally. The environment and VLA executor are borrowed.
 Only NumPy and the existing pure pose helpers are needed at import time.
 """
 
@@ -16,6 +16,7 @@ from robot.mujoco_simulation.pose_utils import PoseUtils
 
 if TYPE_CHECKING:
     from robot.robocasa.env import RoboCasaEnvManager
+    from robot.vla.robocasa_policy_executor import RoboCasaPolicyExecutor, RoboCasaVLAResult
 
 
 @dataclass(slots=True)
@@ -57,21 +58,7 @@ class _Stopped(Exception):
 
 
 class RoboCasaActionController:
-    """Execute move_to_pose, move_linear and binary set_gripper requests.
-
-    Targets and deltas use world metres, and orientations use XYZW quaternions
-    or XYZ roll/pitch/yaw radians. move_to_pose requires an orientation;
-    move_linear preserves the initial orientation when omitted. Its steps are
-    interpolation steps, followed by at most settle_steps of endpoint servoing.
-
-    Motion retains env.last_gripper_close. When that is unknown, initialize with
-    set_gripper or explicitly pass gripper_command='open'/'close' on the motion.
-    set_gripper accepts command only; intermediate opening_m is unsupported.
-
-    Cancellation is checked before every step. All steps use arm mode, zero
-    base velocity and zero torso increment. Observations publish periodically
-    and on return when dirty. No applied action is retried after an error.
-    """
+    """Dispatch VLA requests and execute world-frame geometric requests."""
 
     _DEFAULTS = {
         "position_gain": .5,
@@ -86,15 +73,12 @@ class RoboCasaActionController:
     }
 
     def __init__(
-        self, environment: RoboCasaEnvManager, config: dict[str, Any] | None = None
+        self, environment: RoboCasaEnvManager, config: dict[str, Any] | None = None,
+        *, vla_executor: RoboCasaPolicyExecutor | None = None,
     ) -> None:
-        if config is not None and not isinstance(config, dict):
-            raise ValueError("RoboCasa motion config must be a mapping")
         config = dict(config or {})
-        unknown = set(config) - self._DEFAULTS.keys()
-        if unknown:
-            raise ValueError(f"unsupported RoboCasa motion settings: {', '.join(sorted(unknown))}")
         self._environment = environment
+        self._vla = vla_executor
         self.config = self._DEFAULTS | config
         for name in self._DEFAULTS:
             if name in {"position_gain", "rotation_gain", "position_tolerance_m", "rotation_tolerance_rad"}:
@@ -105,12 +89,14 @@ class RoboCasaActionController:
     def execute(
         self, action_type: str, params: dict[str, Any], *,
         cancel_check: Callable[[], str | None] | None = None,
-    ) -> RoboCasaActionResult:
-        """Return operational/validation failures; propagate BaseExceptions.
+    ) -> RoboCasaActionResult | RoboCasaVLAResult:
+        """Dispatch VLA to the borrowed executor, or run a geometric request.
 
-        Request completion means pose convergence or gripper command execution.
+        Completion means pose convergence, gripper execution or requested VLA steps.
         Native/evaluation success can end any request early as goal_reached.
         """
+        if action_type == "vla_execute":
+            return self._vla_execute(params, cancel_check)
         progress = _Progress()
         completed, reason, message, error_stage = False, "error", None, None
         observation_error = None
@@ -124,10 +110,6 @@ class RoboCasaActionController:
             self._check_stop(progress, cancel_check)
             progress.stage = "control_spec"
             spec = self._environment.get_arm_control_spec()
-            for prefix in ("input", "output"):
-                for suffix in ("min", "max"):
-                    key = f"{prefix}_{suffix}"
-                    spec[key] = self._vector(spec[key], key, length=6)
             if np.any(spec["output_min"] >= 0) or np.any(spec["output_max"] <= 0):
                 raise ValueError("OSC output ranges must contain zero and both motion directions")
             progress.stage = "geometry"
@@ -182,21 +164,23 @@ class RoboCasaActionController:
             error_message=message, error_stage=error_stage, observation_error=observation_error,
         )
 
+    def _vla_execute(
+        self, params: dict[str, Any], cancel_check: Callable[[], str | None] | None,
+    ) -> RoboCasaVLAResult:
+        if "instruction" in params and "prompt" in params and params["instruction"] != params["prompt"]:
+            raise ValueError("instruction and prompt must agree when both are supplied")
+        if self._vla is None:
+            raise RuntimeError("RoboCasa VLA executor is not initialized")
+        return self._vla.execute(
+            params.get("instruction", params.get("prompt")),
+            step=params.get("step"), cancel_check=cancel_check,
+        )
+
     def _request(self, action_type: str, params: dict[str, Any]) -> dict[str, Any]:
         if action_type not in {"move_to_pose", "move_linear", "set_gripper"}:
             raise ValueError(f"unsupported RoboCasa geometric action {action_type!r}")
         if not isinstance(params, dict):
             raise ValueError("action parameters must be a mapping")
-        allowed = {"steps", "frame"}
-        if action_type == "set_gripper":
-            allowed.add("command")
-        else:
-            allowed |= {"position_m", "orientation_quat", "orientation_euler", "gripper_command"}
-            if action_type == "move_linear":
-                allowed |= {"delta_m", "settle_steps"}
-        unknown = set(params) - allowed
-        if unknown:
-            raise ValueError(f"unsupported {action_type} parameters: {', '.join(sorted(unknown))}")
         if params.get("frame", "world") != "world":
             raise ValueError("geometric targets and deltas must use frame='world'")
         default_steps = {"move_to_pose": "max_steps", "move_linear": "move_linear_steps", "set_gripper": "gripper_steps"}
@@ -212,7 +196,7 @@ class RoboCasaActionController:
             request["gripper"] = self._gripper_command(params["gripper_command"])
         if ("position_m" in params) == ("delta_m" in params):
             raise ValueError("supply exactly one position_m or delta_m target")
-        request["relative"] = "delta_m" in params
+        request["relative"] = action_type == "move_linear" and "delta_m" in params
         key = "delta_m" if request["relative"] else "position_m"
         request["position"] = self._vector(params[key], key)
         if "orientation_quat" in params and "orientation_euler" in params:
@@ -322,8 +306,6 @@ class RoboCasaActionController:
             if count > 0:
                 progress.steps += count
                 progress.dirty = True
-        if count != 1:
-            raise RuntimeError("RoboCasa step did not increment its action counter exactly once")
         self._check_stop(progress, cancel_check)
         if progress.steps % self.config["publish_every_n_steps"] == 0:
             self._publish(progress)
@@ -355,16 +337,9 @@ class RoboCasaActionController:
         return float(value)
 
     @staticmethod
-    def _vector(value: Any, name: str, *, length: int = 3, keys: tuple[str, ...] | None = None) -> np.ndarray:
+    def _vector(
+        value: Any, name: str, *, length: int = 3, keys: tuple[str, ...] | None = None,
+    ) -> np.ndarray:
         if isinstance(value, dict):
-            keys = keys or tuple("xyzw"[:length])
-            if set(value) != set(keys):
-                raise ValueError(f"{name} must have exactly the keys {keys}")
-            value = [value[key] for key in keys]
-        array = np.asarray(value)
-        if (
-            array.shape != (length,) or array.dtype.kind not in "fiu"
-            or not np.all(np.isfinite(array))
-        ):
-            raise ValueError(f"{name} must contain exactly {length} finite real numbers")
-        return array.astype(np.float64, copy=True)
+            value = [value[key] for key in (keys or "xyzw"[:length])]
+        return PoseUtils.vector(value, name=name, length=length)
