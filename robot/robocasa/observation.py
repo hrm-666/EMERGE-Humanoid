@@ -1,28 +1,22 @@
-"""Publish calibrated RoboCasa RGB snapshots for EMERGE's visual readers.
+"""Update current RoboCasa images and calibration using LIBERO's file lifecycle.
 
-Each publication owns a unique image directory. Only after every PNG is saved
-is observation.json atomically replaced. Previously published images remain
-available to readers that already loaded an older manifest. Episode/workspace
-cleanup belongs to the runner, not to this synchronous writer.
+Each camera has a fixed PNG path, replaced through a temporary file. The shared
+observation.json is replaced after the images, just as in LIBERO. Historical
+action evidence is owned by EMERGE's existing visual memory, not this writer.
 """
 
 from __future__ import annotations
 
 import json
-import logging
 import os
-import shutil
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from tempfile import NamedTemporaryFile, mkdtemp
 from uuid import uuid4
 
 import numpy as np
 
 from robot.robocasa.cameras import RoboCasaCameraFrame
-
-logger = logging.getLogger(__name__)
 
 
 class RoboCasaObservationWriter:
@@ -31,7 +25,7 @@ class RoboCasaObservationWriter:
     Camera optical axes are +X right, +Y down, +Z forward. T_world_camera maps
     those coordinates into the simulation world, in metres. start_episode()
     removes the current manifest before reset; close of the owning environment
-    leaves the last complete publication available for final visual inspection.
+    leaves the current images and manifest available for final visual inspection.
     """
 
     def __init__(
@@ -59,7 +53,7 @@ class RoboCasaObservationWriter:
         self._revision = 0
 
     def invalidate(self) -> None:
-        """Remove the current manifest, retaining images used by existing readers."""
+        """Remove the current manifest before resetting or invalidating a scene."""
         self.manifest_path.unlink(missing_ok=True)
 
     def start_episode(self) -> None:
@@ -68,15 +62,7 @@ class RoboCasaObservationWriter:
         self._episode_id = uuid4().hex
 
     def write(self, frames: Mapping[str, RoboCasaCameraFrame]) -> Path:
-        """Publish one complete snapshot; failures before commit keep the prior manifest.
-
-        An interrupted replacement may already have published the new snapshot.
-        Preserve its images and revision in that case. If its outcome cannot be
-        read, retain the images and reserve the revision rather than risk deleting
-        referenced files or reusing an observed revision. Inputs must belong to
-        one synchronous capture; this method neither renders nor resizes them.
-        """
-        captured_at = datetime.now(timezone.utc).isoformat()
+        """Overwrite current images and then publish their calibration manifest."""
         selected = []
         for name in self.camera_names:
             if name not in frames:
@@ -87,74 +73,46 @@ class RoboCasaObservationWriter:
 
         from PIL import Image
 
-        revision = self._revision + 1
-        episode_root = self._image_root / self._episode_id
-        episode_root.mkdir(parents=True, exist_ok=True)
-        image_directory = Path(mkdtemp(prefix=f"{revision:06d}-", dir=episode_root))
-        temporary_manifest: Path | None = None
-        commit_attempted = False
+        self._revision += 1
+        self._image_root.mkdir(parents=True, exist_ok=True)
+        views = []
+        for index, frame in enumerate(selected):
+            # Stable numeric names also support MuJoCo names containing slashes.
+            image_path = self._image_root / f"{index:03d}.png"
+            temporary_image = image_path.with_name(f".{image_path.stem}.{os.getpid()}.tmp.png")
+            try:
+                Image.fromarray(frame.rgb).save(temporary_image, format="PNG")
+                os.replace(temporary_image, image_path)
+            finally:
+                temporary_image.unlink(missing_ok=True)
+            views.append({
+                "name": frame.name,
+                "image_path": image_path.relative_to(self.workspace).as_posix(),
+                "width": frame.width,
+                "height": frame.height,
+                "intrinsics": frame.intrinsics.tolist(),
+                "T_world_camera": frame.T_world_camera.tolist(),
+            })
+        payload = {
+            "schema_version": "Emerge.robocasa_observation.v1",
+            "revision": self._revision,
+            "episode_id": self._episode_id,
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "coordinate_frame": "world",
+            "reference_view": self.reference_view,
+            "rgbd": False,
+            "views": views,
+        }
+        self.manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_manifest = self.manifest_path.with_name(f".observation.{os.getpid()}.tmp.json")
         try:
-            views = []
-            for index, frame in enumerate(selected):
-                # Use numeric filenames: model camera names need not be safe paths.
-                image_path = image_directory / f"{index:03d}.png"
-                Image.fromarray(frame.rgb).save(image_path, format="PNG")
-                views.append({
-                    "name": frame.name,
-                    "image_path": image_path.relative_to(self.workspace).as_posix(),
-                    "width": frame.width,
-                    "height": frame.height,
-                    "intrinsics": frame.intrinsics.tolist(),
-                    "T_world_camera": frame.T_world_camera.tolist(),
-                })
-            payload = {
-                "schema_version": "Emerge.robocasa_observation.v1",
-                "revision": revision,
-                "episode_id": self._episode_id,
-                "captured_at": captured_at,
-                "coordinate_frame": "world",
-                "reference_view": self.reference_view,
-                "rgbd": False,
-                "views": views,
-            }
-            self.manifest_path.parent.mkdir(parents=True, exist_ok=True)
-            with NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=self.manifest_path.parent,
-                prefix=".observation.", suffix=".tmp", delete=False,
-            ) as stream:
-                temporary_manifest = Path(stream.name)
-                json.dump(payload, stream, ensure_ascii=False, allow_nan=False, indent=2)
-                stream.write("\n")
-            commit_attempted = True
+            temporary_manifest.write_text(
+                json.dumps(payload, ensure_ascii=False, allow_nan=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
             os.replace(temporary_manifest, self.manifest_path)
-            self._revision = revision
-            temporary_manifest = None
-        except BaseException:
-            remove_images = True
-            if commit_attempted:
-                # A signal can arrive after rename succeeds but before the next
-                # Python assignment. Reconcile against the actual publication.
-                self._revision = revision
-                try:
-                    current = json.loads(self.manifest_path.read_text(encoding="utf-8"))
-                except FileNotFoundError:
-                    pass
-                except (OSError, ValueError):
-                    # Unknown outcome: these files may already be referenced.
-                    remove_images = False
-                else:
-                    remove_images = current != payload
-                if remove_images:
-                    self._revision = revision - 1
-            if remove_images:
-                shutil.rmtree(image_directory, ignore_errors=True)
-            raise
         finally:
-            if temporary_manifest is not None:
-                try:
-                    temporary_manifest.unlink(missing_ok=True)
-                except OSError:
-                    logger.warning("Could not remove temporary observation manifest", exc_info=True)
+            temporary_manifest.unlink(missing_ok=True)
         return self.manifest_path
 
     @staticmethod
