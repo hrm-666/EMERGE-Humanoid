@@ -11,6 +11,16 @@
 
 从仓库根目录运行：
 
+先在一个 tmux 会话启动三个模型，默认分别使用 GPU 0、1、2：
+
+```bash
+bash scripts/model_server/start_external_model_servers.sh --robocasa
+```
+
+该预设使用相邻 `openpi/` 的原始策略服务及工作区 `checkpoints/` 的权重，复用已有服务启动和退出清理逻辑。另一个 tmux 会话运行评测即可。服务已启动时无需重复启动。
+
+当前容器 EGL 设备索引为 0；它与 `nvidia-smi` 的 GPU 编号不是同一个枚举。评测会话先执行 `export MUJOCO_GL=egl MUJOCO_EGL_DEVICE_ID=0`，再运行：
+
 ```bash
 conda activate EmergePolicy
 python -B scripts/RoboCasa_eval/eval_robocasa_agent.py \
@@ -32,8 +42,8 @@ python -B scripts/RoboCasa_eval/eval_robocasa_agent.py \
 ## 执行流程
 
 1. 创建本次任务的 workspace、初始文档和独立 driver 配置，由 Controller 加载配置。
-2. 直接检查 OpenPI、VGGT、SAM3 的 `/healthz`；依赖缺失时记录基础设施错误并退出。通过后，用 RoboCasa Python 启动 `robot.controller --driver robocasa`，安装 profile 并创建原生环境。
-3. 等待私有状态、`robots.robocasa`、profile 和初始相机观测就绪，从环境获取原始任务指令及预算。
+2. 用 RoboCasa Python 启动 `robot.controller --driver robocasa`，安装 profile 并创建原生环境。模型服务连接由已有执行器和子代理处理。
+3. 与 LIBERO 一样等待私有状态和机器人状态就绪，从环境获取原始任务指令及预算。
 4. 用 EmergePolicy Python 启动现有 headless runtime。主 agent 自主规划、调用子代理并执行几何/VLA 动作；启动器不预写任务动作序列。
 5. 监督环境状态。主 agent 正常提前返回、任务仍未完成时，最多进行两轮同 session 的继续反馈。每轮使用独立 run_id，共享最初的执行截止时间。
 6. 成功、预算耗尽、超时、异常或收到中断后，先停止主 agent，让它通过仍在运行的 Controller 取消未完成动作，再清理 Controller，关闭视频编码器，最后保存结果。
@@ -52,8 +62,7 @@ RoboCasa 保留 `gym.make(seed=...)` 及既有 reset 流程，不引入 LIBERO �
 | `--max-agent-feedback-rounds` | 主 agent 正常返回但任务未完成时的继续反馈次数，默认 2 |
 | `--ready-timeout-s` | 环境初始化超时，默认 300 秒 |
 | `--episode-timeout-s` | 就绪后的执行超时，默认 1800 秒，续跑不会重置 |
-| `--shutdown-grace-s` | 子进程收到中断后的退出宽限，默认 15 秒 |
-| `--skip-service-checks` | 仅在受控诊断中跳过本地模型健康检查；日志会记录是否跳过 |
+| `--shutdown-grace-s` | 子进程收到中断后的退出宽限，默认 90 秒，覆盖动作取消与视觉记忆收尾 |
 
 ## 输出与判定
 
@@ -82,7 +91,7 @@ RoboCasa 保留 `gym.make(seed=...)` 及既有 reset 流程，不引入 LIBERO �
 
 `status.json` 是覆盖更新的进程通信文件，顶层字段与 LIBERO 一致：`schema_version`、`ready`、`success`、`done`、`reward`、`environment_steps`、`settling_steps`、`action_steps`、`max_action_steps`、`termination_reason`、`metadata`。RoboCasa 没有额外初始化 settling 动作，因此 `settling_steps=0`、`environment_steps=action_steps`；几何动作中的保持步数仍计入 `action_steps`。任务名、split、seed、原生指令与异常详情放在 `metadata` 中。
 
-与 LIBERO 一样，结果中的 `termination_reason` 以 `infrastructure_error:` 前缀标记环境、服务或进程错误；`success` 表示环境成功，`max_action_steps`、`episode_timeout` 等表示任务未完成，`interrupted` 表示用户中断。初始化 NaN 等错误仍与策略失败分开判定。`controller.log` 和 `agent.log` 完整保留，启动器的健康检查、退出清理及异常诊断附加到 `agent.log`。每轮 headless 的 `agent_runs/<run_id>/result.json` 继续使用通用运行时原有格式。
+与 LIBERO 一样，结果中的 `termination_reason` 以 `infrastructure_error:` 前缀标记环境、服务或进程错误；`success` 表示环境成功，`max_action_steps`、`episode_timeout` 等表示任务未完成，`interrupted` 表示用户中断。初始化 NaN 等错误仍与策略失败分开判定。`controller.log` 和 `agent.log` 完整保留，启动器的异常诊断附加到 `agent.log`。每轮 headless 的 `agent_runs/<run_id>/result.json` 继续使用通用运行时原有格式。
 
 启动请求只在运行期间使用临时 `.agent_request.json`，结束后删除；每轮请求快照由 EMERGE 原样保存在 `agent_runs/<run_id>/request.json`，不再另外保留重复的 `agent_requests/`。`sessions/`、`memory/` 及其图片的原有工作机制不变。
 
@@ -95,3 +104,5 @@ CLI 返回码：0 表示评测正常结束（包括任务失败），1 表示执
 视频按仿真控制步回放，不把 LLM 等待时间填成静止画面；采集不增加仿真步、不重新渲染、不新增历史 PNG。环境初始化尚未生成可用观测就失败时无法生成视频。视频使用固定文件名 `rollout.mp4`，与 LIBERO 一样不在结果中另存路径字段。编码依赖 RoboCasa Python 环境中的 `imageio` 和 `imageio-ffmpeg`；与现有 OpenPI 录像使用同一依赖。
 
 入口仍只负责一个 episode，批量调度和断点续跑尚未实现。
+
+评测器直接复用 LIBERO 的进程清理、agent 结果校验、继续反馈判定和动作统计。环境已给出成功或步数耗尽等终态后，收尾耗时不改变该回合判定。90秒退出宽限覆盖现有视觉监控的最终验证与记忆保存，不修改通用 agent、视觉监控或记忆逻辑。

@@ -15,13 +15,13 @@ This module does not import RoboCasa/robosuite, step physics, or write artifacts
 
 from __future__ import annotations
 
-import xml.etree.ElementTree as ET
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
+from robot.mujoco_simulation.camera_injector import CameraInjector
 from robot.mujoco_simulation.vggt_camera_rig import VggtCameraRig
 
 
@@ -67,9 +67,6 @@ class RoboCasaCameraManager:
             for name, settings in (camera_config or {}).items()
         )
         self._frames: dict[str, RoboCasaCameraFrame] = {}
-        auto_names = {c.name for c in self._configs if c.mode == "auto"}
-        if auto_names and auto_names != set(VggtCameraRig._LAYOUT):
-            raise ValueError("auto cameras must declare all five VGGT perception views")
         self._rig_region: dict[str, Any] | None = None
 
     @property
@@ -104,32 +101,12 @@ class RoboCasaCameraManager:
             environment.unwrapped.set_xml_processor(self.process_model_xml)
 
     def process_model_xml(self, xml: str) -> str:
-        """Add world-fixed cameras without changing existing model elements."""
-        fixed = [config for config in self._configs if config.mode in {"fixed", "auto"}]
-        if not fixed:
-            return xml
-        root = ET.fromstring(xml)
-        worldbody = root.find("worldbody")
-        if worldbody is None:
-            raise ValueError("MuJoCo XML is missing worldbody; cannot add RoboCasa cameras")
-        existing_names = {node.get("name") for node in root.iter("camera")}
-        for config in fixed:
-            if config.name in existing_names:
-                raise ValueError(
-                    f"fixed camera {config.name!r} collides with an existing model camera"
-                )
-            ET.SubElement(
-                worldbody,
-                "camera",
-                name=config.name,
-                mode="fixed",
-                # Auto placeholders are replaced after native reset selects
-                # the actual kitchen. They are not native Gym policy cameras.
-                pos=" ".join(format(value, ".17g") for value in (config.pos or (0, 0, 2))),
-                quat=" ".join(format(value, ".17g") for value in (config.quat or (1, 0, 0, 0))),
-                fovy=format(config.fovy, ".17g"),
-            )
-        return ET.tostring(root, encoding="unicode")
+        """Install configured views with LIBERO's existing XML injector."""
+        return CameraInjector().merge_cameras(xml, [
+            {"name": c.name, "pos": c.pos or (0, 0, 2),
+             "quat": c.quat or (1, 0, 0, 0), "fovy": c.fovy}
+            for c in self._configs if c.mode in {"fixed", "auto"}
+        ])
 
     def apply_auto_rig(self, environment: Any) -> None:
         """Plan once after reset; forward kinematics without advancing physics.
@@ -288,8 +265,6 @@ class RoboCasaCameraManager:
                     corners = VggtCameraRig._box_corners(lower, upper) @ rotation.T + fixture.pos
                 points.extend(corners)
         points = np.asarray(points, dtype=float)
-        if points.ndim != 2 or points.shape[1] != 3 or not np.all(np.isfinite(points)):
-            raise ValueError("task fixtures have invalid observation bounds")
         minimum = points.min(0) - [0.10, 0.10, 0.02]
         maximum = points.max(0) + [0.10, 0.10, 0.05]
         return {
@@ -352,16 +327,10 @@ class RoboCasaCameraManager:
         if mode not in {"existing", "fixed", "auto"}:
             raise ValueError(f"camera {name!r} mode must be existing, fixed or auto")
         width, height = settings.get("width"), settings.get("height")
-        if any(value is not None and (not isinstance(value, int) or isinstance(value, bool) or value <= 0)
-               for value in (width, height)):
-            raise ValueError("camera dimensions must be positive integers")
         if mode == "existing":
             return _CameraConfig(name, mode, width, height)
         pos = quat = None
-        if mode == "auto":
-            if width is None or height is None:
-                raise ValueError("auto cameras require width and height")
-        else:
+        if mode == "fixed":
             from robot.mujoco_simulation.pose_utils import PoseUtils
 
             pos = tuple(PoseUtils.vector(settings["pos"], name="camera.pos"))
@@ -371,6 +340,4 @@ class RoboCasaCameraManager:
                 raise ValueError("camera quaternion must be nonzero")
             quat = tuple(quaternion / norm)
         fovy = float(settings.get("fovy", 62.0))
-        if not 0 < fovy < 180:
-            raise ValueError("camera fovy must be between 0 and 180 degrees")
         return _CameraConfig(name, mode, width, height, pos, quat, fovy)

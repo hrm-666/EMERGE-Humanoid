@@ -7,8 +7,6 @@ import logging
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
 from Emerge.runtime.storage import atomic_json
 from robot.robocasa.env import RoboCasaEnvManager, StepResult
 
@@ -30,10 +28,8 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
         **env_kwargs: Any,
     ) -> None:
         super().__init__(**env_kwargs)
-        if max_action_steps is not None:
-            self._validate_budget(max_action_steps)
         self._budget_override = (
-            None if max_action_steps is None else int(max_action_steps)
+            None if max_action_steps is None else max(1, int(max_action_steps))
         )
         self._max_action_steps = self._budget_override
         self.status_path = (
@@ -91,7 +87,6 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
     def reset(self, *, seed: int | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
         """Reset evaluation state around exactly one call to the base reset."""
         self._require_environment()
-        self._validate_seed(seed)
         self._reset_evaluation_state()
         # Invalidate the preceding episode even if horizon lookup or reset fails.
         self._clear_observation()
@@ -103,7 +98,6 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
             if self._budget_override is None:
                 registry = importlib.import_module("robocasa.utils.dataset_registry_utils")
                 budget = registry.get_task_horizon(self.env_name)
-                self._validate_budget(budget)
                 self._max_action_steps = int(budget)
             result = super().reset(seed=seed)
             if super().check_success():
@@ -247,12 +241,7 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
             self._finish("error")
         self._error_message = f"{type(exc).__name__}: {exc}"
         if self._closed_status is not None:
-            self._closed_status.update(
-                done=self._episode_done,
-                success=self._episode_success,
-                termination_reason=self._termination_reason,
-                error_message=self._error_message,
-            )
+            self._closed_status["error_message"] = self._error_message
 
     def _write_evaluation_status(self) -> None:
         path = self.status_path
@@ -276,12 +265,3 @@ class RoboCasaEvalEnvManager(RoboCasaEnvManager):
             self._write_evaluation_status()
         except Exception:
             logger.exception("Could not publish RoboCasa evaluation status to %s", self.status_path)
-
-    @staticmethod
-    def _validate_budget(budget: Any) -> None:
-        if (
-            isinstance(budget, (bool, np.bool_))
-            or not isinstance(budget, (int, np.integer))
-            or budget <= 0
-        ):
-            raise ValueError("max_action_steps must be a positive integer")

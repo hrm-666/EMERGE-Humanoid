@@ -5,6 +5,22 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 
+# Keep model processes and cleanup in this launcher; only select RoboCasa defaults.
+if [[ "${1:-}" == "--robocasa" ]]; then
+    OPENPI_SERVER_MODE="robocasa"
+    OPENPI_PYTHON="${OPENPI_PYTHON:-/opt/conda/envs/robocasa/bin/python}"
+    OPENPI_ROOT="${OPENPI_ROOT:-${REPO_ROOT}/../openpi}"
+    OPENPI_CONFIG="${OPENPI_CONFIG:-pi05_pretrain_human300}"
+    OPENPI_CHECKPOINT="${OPENPI_CHECKPOINT:-${REPO_ROOT}/../checkpoints/hf_download/pi05_pretrain_human300/multitask_learning/75000}"
+    VGGT_CHECKPOINT="${VGGT_CHECKPOINT:-${REPO_ROOT}/../checkpoints/model.pt}"
+    SAM3_CHECKPOINT="${SAM3_CHECKPOINT:-${REPO_ROOT}/../checkpoints/sam3.pt}"
+    VGGT_MAX_BATCH_SIZE="${VGGT_MAX_BATCH_SIZE:-1}"
+    SAM3_MAX_BATCH_SIZE="${SAM3_MAX_BATCH_SIZE:-1}"
+    SERVICES="openpi,vggt,sam3"
+    export PYTHONPATH="${REPO_ROOT}:${REPO_ROOT}/third_party/vggt:${REPO_ROOT}/third_party/sam3${PYTHONPATH:+:${PYTHONPATH}}"
+    shift
+fi
+
 CONDA_BIN="${CONDA_BIN:-conda}"
 OPENPI_ENV="${OPENPI_ENV:-pi05_server}"
 OPENPI_PYTHON="${OPENPI_PYTHON:-}"
@@ -70,11 +86,13 @@ RESET="\033[0m"
 
 usage() {
     cat <<'EOF'
-Usage: scripts/model_server/start_external_model_servers.sh [--services LIST]
+Usage: scripts/model_server/start_external_model_servers.sh [--robocasa] [--services LIST]
 
 Start selected external model services.
 
 Command-line options:
+  --robocasa       Put first to select this workspace's RoboCasa model paths and
+                    environments, using the original OpenPI serve_policy.py.
   --services LIST   Comma-separated services to start. Accepted values:
                     openpi, vggt, sam3, cosmos, all
                     Aliases: vla=openpi, wam=cosmos
@@ -89,9 +107,9 @@ Service selection and runtime:
                                 (default: auto-detect python3 or python)
 
 OpenPI:
-  OPENPI_SERVER_MODE             standard, behavior_b1k, or behavior_champion
+  OPENPI_SERVER_MODE             standard, robocasa, behavior_b1k, or behavior_champion
                                 (default: standard)
-  OPENPI_ROOT                    Policy checkout used by a BEHAVIOR mode
+  OPENPI_ROOT                    Policy checkout used by RoboCasa or BEHAVIOR
                                 (default: <repo>/third_party/openpi)
   OPENPI_ENV                    Conda environment (default: pi05_server)
   OPENPI_PYTHON                 Direct Python executable; bypasses OPENPI_ENV
@@ -181,6 +199,7 @@ JAX:
                                 (default: false)
 
 Examples:
+  bash scripts/model_server/start_external_model_servers.sh --robocasa
   bash scripts/model_server/start_external_model_servers.sh
   bash scripts/model_server/start_external_model_servers.sh --services cosmos
   OPENPI_MAX_BATCH_SIZE=8 VGGT_MAX_BATCH_SIZE=4 \
@@ -423,7 +442,7 @@ echo "Selected services: ${SERVICES}"
 if service_enabled openpi; then
     check_port "OpenPI" "${OPENPI_PORT}"
     case "${OPENPI_SERVER_MODE}" in
-        standard) ;;
+        standard|robocasa) ;;
         behavior_b1k)
             require_path "OpenPI root" "${OPENPI_ROOT}"
             require_path "BEHAVIOR OpenPI server" "${OPENPI_ROOT}/scripts/b1k/serve_b1k.py"
@@ -444,7 +463,7 @@ if service_enabled openpi; then
             fi
             ;;
         *)
-            echo -e "${RED}✗ OPENPI_SERVER_MODE must be standard, behavior_b1k, or behavior_champion${RESET}" >&2
+            echo -e "${RED}✗ OPENPI_SERVER_MODE must be standard, robocasa, behavior_b1k, or behavior_champion${RESET}" >&2
             exit 2
             ;;
     esac
@@ -470,7 +489,14 @@ if service_enabled cosmos; then
 fi
 
 if service_enabled openpi; then
-    if [[ "${OPENPI_SERVER_MODE}" == "behavior_b1k" ]]; then
+    if [[ "${OPENPI_SERVER_MODE}" == "robocasa" ]]; then
+        start_server_with_python_in_directory \
+            "OpenPI RoboCasa server :${OPENPI_PORT}" \
+            "${OPENPI_PYTHON}" "${OPENPI_GPU}" "${OPENPI_ROOT}" \
+            "${OPENPI_PYTHON}" -u scripts/serve_policy.py \
+            --port="${OPENPI_PORT}" policy:checkpoint \
+            --policy.config="${OPENPI_CONFIG}" --policy.dir="${OPENPI_CHECKPOINT}"
+    elif [[ "${OPENPI_SERVER_MODE}" == "behavior_b1k" ]]; then
         openpi_command=(
             "${OPENPI_PYTHON}"
             scripts/b1k/serve_b1k.py

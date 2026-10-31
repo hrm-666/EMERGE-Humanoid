@@ -47,10 +47,6 @@ class VggtCameraRig:
         camera_settings: dict[str, dict[str, Any]],
     ) -> dict[str, CameraPose]:
         """Calculate fixed episode poses from scene geometry and camera FOV."""
-        if set(camera_settings) != set(self._LAYOUT):
-            expected = ", ".join(self._LAYOUT)
-            raise ValueError(f"automatic VGGT rig requires these cameras: {expected}")
-
         bounds_min, bounds_max, surface_z = self._observation_bounds(environment)
         look_at = np.array(
             [

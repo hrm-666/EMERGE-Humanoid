@@ -80,11 +80,6 @@ class RoboCasaActionController:
         self._environment = environment
         self._vla = vla_executor
         self.config = self._DEFAULTS | config
-        for name in self._DEFAULTS:
-            if name in {"position_gain", "rotation_gain", "position_tolerance_m", "rotation_tolerance_rad"}:
-                self.config[name] = self._positive_number(self.config[name], name)
-            else:
-                self.config[name] = self._integer(self.config[name], name, allow_zero=name == "settle_steps")
 
     def execute(
         self, action_type: str, params: dict[str, Any], *,
@@ -103,15 +98,12 @@ class RoboCasaActionController:
         try:
             request = self._request(action_type, params)
             progress.stage = "environment_state"
-            self._check_stop(progress, cancel_check)
             state = self._environment.get_robot_state()
             progress.terminated = bool(state["terminated"])
             progress.truncated = bool(state["truncated"])
             self._check_stop(progress, cancel_check)
             progress.stage = "control_spec"
             spec = self._environment.get_arm_control_spec()
-            if np.any(spec["output_min"] >= 0) or np.any(spec["output_max"] <= 0):
-                raise ValueError("OSC output ranges must contain zero and both motion directions")
             progress.stage = "geometry"
             start, start_quaternion = self._environment.get_eef_pose_world()
             if action_type == "set_gripper":
@@ -167,8 +159,6 @@ class RoboCasaActionController:
     def _vla_execute(
         self, params: dict[str, Any], cancel_check: Callable[[], str | None] | None,
     ) -> RoboCasaVLAResult:
-        if "instruction" in params and "prompt" in params and params["instruction"] != params["prompt"]:
-            raise ValueError("instruction and prompt must agree when both are supplied")
         if self._vla is None:
             raise RuntimeError("RoboCasa VLA executor is not initialized")
         return self._vla.execute(
@@ -179,13 +169,11 @@ class RoboCasaActionController:
     def _request(self, action_type: str, params: dict[str, Any]) -> dict[str, Any]:
         if action_type not in {"move_to_pose", "move_linear", "set_gripper"}:
             raise ValueError(f"unsupported RoboCasa geometric action {action_type!r}")
-        if not isinstance(params, dict):
-            raise ValueError("action parameters must be a mapping")
         if params.get("frame", "world") != "world":
             raise ValueError("geometric targets and deltas must use frame='world'")
         default_steps = {"move_to_pose": "max_steps", "move_linear": "move_linear_steps", "set_gripper": "gripper_steps"}
         request = {
-            "steps": self._integer(params.get("steps", self.config[default_steps[action_type]]), "steps"),
+            "steps": max(1, int(params.get("steps", self.config[default_steps[action_type]]))),
             "settle_steps": 0, "relative": False, "position": None, "orientation": None,
             "gripper": None,
         }
@@ -194,25 +182,17 @@ class RoboCasaActionController:
             return request
         if "gripper_command" in params:
             request["gripper"] = self._gripper_command(params["gripper_command"])
-        if ("position_m" in params) == ("delta_m" in params):
-            raise ValueError("supply exactly one position_m or delta_m target")
-        request["relative"] = action_type == "move_linear" and "delta_m" in params
+        request["relative"] = action_type == "move_linear" and "position_m" not in params
         key = "delta_m" if request["relative"] else "position_m"
         request["position"] = self._vector(params[key], key)
-        if "orientation_quat" in params and "orientation_euler" in params:
-            raise ValueError("supply only one orientation representation")
-        if "orientation_quat" in params:
-            quaternion = self._vector(params["orientation_quat"], "orientation_quat", length=4)
-            request["orientation"] = PoseUtils.normalize_quaternion(quaternion)
-        elif "orientation_euler" in params:
-            euler = self._vector(params["orientation_euler"], "orientation_euler", keys=("roll", "pitch", "yaw"))
-            request["orientation"] = PoseUtils.euler_to_quaternion(euler)
-        elif action_type == "move_to_pose":
+        orientation = {key: self._vector(params[key], key, length=len(keys), keys=keys)
+                       for key, keys in (("orientation_quat", "xyzw"), ("orientation_euler", ("roll", "pitch", "yaw")))
+                       if key in params}
+        request["orientation"] = PoseUtils.resolve_orientation(orientation)
+        if action_type == "move_to_pose" and request["orientation"] is None:
             raise ValueError("move_to_pose requires orientation_quat or orientation_euler")
         if action_type == "move_linear":
-            request["settle_steps"] = self._integer(
-                params.get("settle_steps", self.config["settle_steps"]), "settle_steps", allow_zero=True
-            )
+            request["settle_steps"] = max(0, int(params.get("settle_steps", self.config["settle_steps"])))
         return request
 
     def _check_stop(self, progress: _Progress, cancel_check: Callable[[], str | None] | None) -> None:
@@ -230,8 +210,6 @@ class RoboCasaActionController:
             raise _Stopped("goal_reached")
         if progress.terminated or progress.truncated:
             raise _Stopped("environment_terminated" if progress.terminated else "environment_truncated")
-        if getattr(environment, "remaining_steps", None) == 0:
-            raise _Stopped("max_action_steps")
         progress.stage = "cancel_check"
         message = cancel_check() if cancel_check else None
         if message:
@@ -259,7 +237,6 @@ class RoboCasaActionController:
         cancel_check: Callable[[], str | None] | None,
     ) -> bool:
         for _ in range(steps):
-            self._check_stop(progress, cancel_check)
             if self._converged(target, quaternion, progress):
                 return True
             self._advance(target, quaternion, gripper, spec, progress, cancel_check)
@@ -271,7 +248,6 @@ class RoboCasaActionController:
         spec: dict[str, Any], progress: _Progress,
         cancel_check: Callable[[], str | None] | None,
     ) -> None:
-        self._check_stop(progress, cancel_check)
         position_error, rotation_error = self._measure(target, quaternion, progress)
         if gripper is None:
             gripper = self._environment.last_gripper_close
@@ -320,21 +296,6 @@ class RoboCasaActionController:
         if not isinstance(value, str) or value.strip().lower() not in {"open", "close"}:
             raise ValueError("gripper command must be 'open' or 'close'; intermediate widths are unsupported")
         return value.strip().lower() == "close"
-
-    @staticmethod
-    def _integer(value: Any, name: str, *, allow_zero: bool = False) -> int:
-        minimum = 0 if allow_zero else 1
-        if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)) or value < minimum:
-            raise ValueError(f"{name} must be an integer >= {minimum}")
-        return int(value)
-
-    @staticmethod
-    def _positive_number(value: Any, name: str) -> float:
-        if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, float, np.integer, np.floating)):
-            raise ValueError(f"{name} must be a positive finite number")
-        if not np.isfinite(value) or value <= 0:
-            raise ValueError(f"{name} must be a positive finite number")
-        return float(value)
 
     @staticmethod
     def _vector(

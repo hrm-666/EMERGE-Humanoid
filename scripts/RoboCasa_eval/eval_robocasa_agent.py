@@ -14,27 +14,34 @@ import json
 import math
 import os
 from pathlib import Path
-import re
 import signal
 import subprocess
 import sys
 import time
 from typing import Any
 from uuid import uuid4
-from urllib import request as urllib_request
-from urllib.parse import urlparse, urlunparse
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from Emerge.runtime.protocol import RunRequest, RunResult
+from Emerge.runtime.protocol import RunRequest
 from Emerge.runtime.storage import atomic_json, atomic_text
-from Emerge.utils.action_queue import normalize_action_document, parse_action_markdown
 from Emerge.utils.helpers import sync_workspace_templates
 from robot.mujoco_simulation.scene_io import (
     default_robot_state_doc, load_robot_state_doc, save_robot_state_doc,
 )
+
+from scripts.Libero_eval.eval_libero_agent import (
+    _action_metrics as action_metrics,
+    _load_json as read_json,
+    _read_agent_result as read_agent_result,
+    _runtime_environment as libero_runtime_environment,
+    _should_continue_after_agent_exit,
+    _terminate_process as stop_process,
+)
+
+read_status = read_json
 
 EVALUATION_RULES = """## RoboCasa Evaluation Rules
 
@@ -54,28 +61,12 @@ class EpisodeError(Exception):
         self.reason, self.stage = reason, stage
 
 
-def read_json(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise ValueError(f"Expected a JSON object: {path}")
-    return value
-
-
-def read_status(path: Path) -> dict[str, Any]:
-    """Read the private controller status; no publication means not ready yet."""
-    try:
-        status = read_json(path)
-    except FileNotFoundError:
-        return {}
-    return status
-
-
 def terminal_outcome(status: dict[str, Any]) -> tuple[str, str] | None:
     if status.get("success"):
         return "success", "success"
     if status.get("done"):
         reason = status.get("termination_reason") or "environment_done"
-        if reason in {"error", "closed"} or status.get("metadata", {}).get("error_message"):
+        if reason in {"error", "closed"}:
             return "infrastructure_error", str(reason)
         return "task_failure", str(reason)
     return None
@@ -84,8 +75,6 @@ def terminal_outcome(status: dict[str, Any]) -> tuple[str, str] | None:
 def prepare_episode(args: argparse.Namespace, directory: Path) -> Path:
     """Allocate fresh files; API credentials stay exclusively in their existing config."""
     base = read_json(args.driver_config)
-    if not isinstance(base.get("robocasa"), dict):
-        raise ValueError("driver config must contain a robocasa object")
     config = deepcopy(base)
     workspace = directory / "workspace"
     # The CLI workspace must be the sole workspace used by controller/agent.
@@ -100,8 +89,6 @@ def prepare_episode(args: argparse.Namespace, directory: Path) -> Path:
         evaluation["max_action_steps"] = args.max_steps
     evaluation.pop("metadata", None)
     evaluation["video_path"] = str(directory / "rollout.mp4") if args.record_video else None
-    if not config.get("observation", {}).get("enabled"):
-        raise ValueError("agent evaluation requires observation.enabled=true")
     workspace.mkdir()
     sync_workspace_templates(workspace, silent=True)
     agents = workspace / "AGENTS.md"
@@ -115,40 +102,10 @@ def prepare_episode(args: argparse.Namespace, directory: Path) -> Path:
 
 
 def runtime_environment() -> dict[str, str]:
-    env = dict(os.environ)
-    env.setdefault("MUJOCO_GL", "egl")
+    env = libero_runtime_environment()
     env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(REPO_ROOT), env.get("PYTHONPATH"))))
-    env.update(NO_COLOR="1", TERM="dumb", PYTHONDONTWRITEBYTECODE="1", PYTHONUNBUFFERED="1")
+    env.update(PYTHONDONTWRITEBYTECODE="1", PYTHONUNBUFFERED="1")
     return env
-
-
-def check_services(args: argparse.Namespace, directory: Path, checks: list[dict]) -> None:
-    """Probe model servers; diagnostics are appended to agent.log."""
-    from Emerge.config.loader import load_config
-    config = load_config(args.agent_config)
-    driver = read_json(directory / "driver_config.json")
-    endpoints = {
-        "OpenPI": driver.get("vla", {}).get("server_url", "ws://localhost:8000"),
-        "VGGT": config.subagents.object_location.vggt_url,
-        "SAM3": config.subagents.object_location.sam3_url,
-    }
-    opener = urllib_request.build_opener(urllib_request.ProxyHandler({}))
-    for name, endpoint in endpoints.items():
-        parsed = urlparse(endpoint)
-        if parsed.scheme not in {"ws", "wss", "http", "https"} or not parsed.hostname or parsed.username:
-            raise EpisodeError("invalid_service_url", f"Invalid {name} service URL", "service_preflight")
-        scheme = "https" if parsed.scheme in {"wss", "https"} else "http"
-        url = urlunparse((scheme, parsed.netloc, "/healthz", "", "", ""))
-        check = {"service": name, "health_url": url, "healthy": False}
-        checks.append(check)
-        try:
-            with opener.open(url, timeout=5) as response:
-                if response.status != 200:
-                    raise ValueError("non-200 health response")
-            check["healthy"] = True
-        except (OSError, ValueError) as exc:
-            raise EpisodeError("service_unavailable", f"{name} health check failed at {url} ({type(exc).__name__})",
-                               "service_preflight") from exc
 
 
 def start_process(command: list[str], workspace: Path, log: Any) -> subprocess.Popen:
@@ -157,42 +114,9 @@ def start_process(command: list[str], workspace: Path, log: Any) -> subprocess.P
                             stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
 
 
-def stop_process(process: subprocess.Popen | None, grace_s: float) -> dict[str, Any] | None:
-    """Stop only an owned process group; allow headless action cancellation first."""
-    if process is None:
-        return None
-    forced = False
-
-    def send(sig: int) -> None:
-        try:
-            if os.name == "posix":
-                os.killpg(process.pid, sig)
-            elif process.poll() is None:
-                process.send_signal(sig)
-        except ProcessLookupError:
-            pass
-
-    if process.poll() is None:
-        send(signal.SIGINT)
-        try:
-            process.wait(timeout=grace_s)
-        except subprocess.TimeoutExpired:
-            forced = True
-            send(signal.SIGTERM)
-            try:
-                process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                send(signal.SIGKILL)
-                process.wait(timeout=3)
-    # A tool subprocess can outlive an already exited headless parent.
-    if os.name == "posix":
-        send(signal.SIGKILL)
-    return {"pid": process.pid, "returncode": process.returncode, "forced": forced}
-
-
 def start_agent(args: argparse.Namespace, directory: Path, workspace: Path,
                 session_id: str, instruction: str, status: dict, deadline: float,
-                feedback_round: int, log: Any) -> tuple[subprocess.Popen, RunRequest, Path]:
+                feedback_round: int, log: Any) -> subprocess.Popen:
     message = (
         f"Complete this RoboCasa simulated robot task:\n\n{instruction}\n\n"
         "Act autonomously through execute_robot_action using the installed embodiment profile. "
@@ -211,7 +135,6 @@ def start_agent(args: argparse.Namespace, directory: Path, workspace: Path,
         message=message, workspace=str(workspace), config=str(args.agent_config),
         session_id=session_id, restrict_to_workspace=True, stream=False,
         timeout_s=max(.001, deadline-time.monotonic()),
-        cancel_timeout_s=min(10., max(.1, args.shutdown_grace_s-1)),
         max_iterations=args.max_agent_iterations,
     )
     request_path = directory / ".agent_request.json"
@@ -221,40 +144,19 @@ def start_agent(args: argparse.Namespace, directory: Path, workspace: Path,
         [args.agent_python, "-B", "-m", "Emerge.cli.headless", "--request", str(request_path),
          "--output-dir", str(output)], workspace, log,
     )
-    return process, request, output / "result.json"
+    process.emerge_run_id = request.run_id
+    process.emerge_session_id = session_id
+    process.emerge_result_path = output / "result.json"
+    return process
 
 
-def read_agent_result(path: Path, request: RunRequest, returncode: int) -> RunResult:
-    result = RunResult.model_validate(read_json(path))
-    if (result.run_id != request.run_id or result.session_id != request.session_id
-            or result.exit_code != returncode):
-        raise ValueError("Agent result does not match its process, run or session")
-    return result
-
-
-def agent_exit_outcome(result: RunResult) -> tuple[str, str]:
-    reason = result.finish_reason
-    if result.run_status == "cancelled":
-        return "infrastructure_error", "agent_cancelled"
-    if result.run_status == "timed_out":
+def agent_exit_outcome(result: dict[str, Any]) -> tuple[str, str]:
+    reason = result["finish_reason"]
+    if result["run_status"] == "timed_out":
         return "task_failure", "episode_timeout"
     if reason in {"runtime_error", "invalid_request", "cleanup_error", "cancellation_unconfirmed", "error"}:
         return "infrastructure_error", f"agent_{reason}"
     return "task_failure", f"agent_{reason}"
-
-
-def action_metrics(path: Path) -> dict[str, Any]:
-    if not path.is_file():
-        return {"action_count": 0, "actions_by_type": {}, "actions_by_status": {}}
-    raw = parse_action_markdown(path.read_text(encoding="utf-8"))
-    document = normalize_action_document(raw) if raw else None
-    counts: dict[str, dict[str, int]] = {"actions_by_type": {}, "actions_by_status": {}}
-    actions = document["actions"] if document else []
-    for action in actions:
-        for field, column in (("action_type", "actions_by_type"), ("status", "actions_by_status")):
-            value = str(action.get(field, "unknown"))
-            counts[column][value] = counts[column].get(value, 0)+1
-    return {"action_count": len(actions), **counts}
 
 
 class EpisodeSupervisor:
@@ -277,13 +179,6 @@ class EpisodeSupervisor:
                                    "environment_initialization")
             robot = load_robot_state_doc(workspace / "ROBOT_STATE.md").get("robots", {}).get("robocasa", {})
             if status.get("ready") and robot.get("ready"):
-                manifest = read_json(workspace / "artifacts/observations/observation.json")
-                views = manifest.get("views", [])
-                if (not (workspace / "EMBODIED.md").is_file() or not views
-                        or not all((workspace / v["image_path"]).is_file() for v in views)):
-                    raise EpisodeError("observation_unavailable", "Initial profile/images are incomplete", "environment_initialization")
-                if not status.get("metadata", {}).get("instruction") or status.get("max_action_steps") is None:
-                    raise EpisodeError("initialization_error", "Task instruction or horizon is missing", "environment_initialization")
                 return status
             if controller.poll() is not None:
                 raise EpisodeError("controller_exited", f"Controller exited during initialization ({controller.returncode}); see controller.log",
@@ -303,19 +198,12 @@ class EpisodeSupervisor:
         feedback_rounds = 0
         instruction = ""
         errors: list[dict[str, Any]] = []
-        process_cleanup: list[dict[str, Any]] = []
-        service_checks: list[dict[str, Any]] = []
         phase = "preparation"
         previous_handlers = {}
         for sig in (signal.SIGINT, signal.SIGTERM):
             previous_handlers[sig] = signal.signal(sig, lambda number, _frame: setattr(self, "signal_number", number))
         try:
             workspace = prepare_episode(args, directory)
-            if not args.skip_service_checks:
-                phase = "service_preflight"
-                check_services(args, directory, service_checks)
-            else:
-                service_checks.append({"service_checks_skipped": True})
             with (directory / "controller.log").open("w", encoding="utf-8") as controller_log, (directory / "agent.log").open("w", encoding="utf-8") as agent_log:
                 try:
                     phase = "environment_initialization"
@@ -330,7 +218,6 @@ class EpisodeSupervisor:
                     phase = "episode_execution"
                     deadline = time.monotonic()+args.episode_timeout_s
                     session_id = "cli:robocasa-eval-"+uuid4().hex
-                    request = result_path = None
                     while True:
                         self.check_interrupted()
                         status = read_status(directory / "status.json")
@@ -346,11 +233,11 @@ class EpisodeSupervisor:
                             outcome, reason = "task_failure", "episode_timeout"
                             break
                         if agent is None:
-                            agent, request, result_path = start_agent(args, directory, workspace, session_id,
-                                                                     instruction, status, deadline, feedback_rounds, agent_log)
+                            agent = start_agent(args, directory, workspace, session_id,
+                                                instruction, status, deadline, feedback_rounds, agent_log)
                         elif agent.poll() is not None:
                             try:
-                                result = read_agent_result(result_path, request, agent.returncode)
+                                result = read_agent_result(agent)
                             except (OSError, ValueError) as exc:
                                 raise EpisodeError("invalid_agent_result", str(exc), "agent_execution") from exc
                             # Read again after exit so a final successful action wins.
@@ -359,28 +246,28 @@ class EpisodeSupervisor:
                             if terminal:
                                 outcome, reason = terminal
                                 break
-                            stop_process(agent, args.shutdown_grace_s)
+                            agent_returncode = agent.returncode
+                            stop_process(agent, grace_s=args.shutdown_grace_s)
                             agent = None
-                            if result.run_status == "completed" and feedback_rounds < args.max_agent_feedback_rounds:
+                            if _should_continue_after_agent_exit(
+                                returncode=agent_returncode, status=status,
+                                feedback_rounds=feedback_rounds,
+                                max_feedback_rounds=args.max_agent_feedback_rounds,
+                            ):
                                 feedback_rounds += 1
                                 print(f"CONTINUE round={feedback_rounds} success=false", flush=True)
                                 continue
                             outcome, reason = agent_exit_outcome(result)
-                            if result.run_status != "completed":
+                            if result["run_status"] != "completed":
                                 errors.append({"stage": "agent_execution",
-                                               "message": result.error.message if result.error else result.finish_reason})
+                                               "message": (result.get("error") or {}).get("message", result["finish_reason"])})
                             break
                         time.sleep(min(args.poll_interval_s, max(0., deadline-time.monotonic())))
                 finally:
                     # Keep the controller alive while headless acknowledges cancellation.
                     for label, process in (("agent", agent), ("controller", controller)):
                         try:
-                            cleanup = stop_process(process, args.shutdown_grace_s)
-                            if cleanup is not None:
-                                process_cleanup.append({"process": label, **cleanup})
-                                if cleanup["forced"]:
-                                    errors.append({"stage": "cleanup", "process": label,
-                                                   "message": "Process exceeded its graceful shutdown budget and required termination"})
+                            stop_process(process, grace_s=args.shutdown_grace_s)
                         except Exception as exc:
                             errors.append({"stage": "cleanup", "process": label, "message": f"{type(exc).__name__}: {exc}"})
         except EpisodeError as exc:
@@ -404,30 +291,9 @@ class EpisodeSupervisor:
             errors.append({"stage": "final_status", "message": str(exc)})
         if status.get("success"):
             outcome, reason = "success", "success"
-        elif status.get("termination_reason") == "error" and outcome != "cancelled":
-            outcome = "infrastructure_error"
-            message = status.get("metadata", {}).get("error_message") or "Environment error"
-            if not any(e.get("message") == message for e in errors):
-                errors.append({"stage": "environment_execution", "message": message})
-        elif errors and any(e["stage"] == "cleanup" for e in errors) and outcome != "cancelled":
-            outcome = "infrastructure_error"
-        try:
-            robot = load_robot_state_doc(workspace / "ROBOT_STATE.md").get("robots", {}).get("robocasa", {})
-            execution = robot.get("last_execution") or {}
-            if (not status.get("success") and outcome != "cancelled"
-                    and (execution.get("reason") == "server_unavailable"
-                         or execution.get("error_stage") in {"inference", "observation_publish", "environment_step"})):
-                outcome = "infrastructure_error"
-                reason = ("policy_service_unavailable" if execution.get("reason") == "server_unavailable"
-                          else f"driver_{execution['error_stage']}_error")
-                errors.append({"stage": "driver_execution", "message": execution.get("error_message") or execution.get("reason")})
-        except (OSError, ValueError) as exc:
-            errors.append({"stage": "artifact_summary", "message": str(exc)})
-            if not status.get("success") and outcome != "cancelled":
-                outcome = "infrastructure_error"
         (directory / ".agent_request.json").unlink(missing_ok=True)
         with (directory / "agent.log").open("a", encoding="utf-8") as log:
-            for record in [*service_checks, *process_cleanup, *errors]:
+            for record in errors:
                 log.write(json.dumps(record, ensure_ascii=False) + "\n")
         if outcome == "infrastructure_error":
             reason = f"infrastructure_error:{reason}"
@@ -485,8 +351,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--controller-python", "--watchdog-python", default=os.environ.get("ROBOCASA_PYTHON", sys.executable))
     parser.add_argument("--agent-python", default=sys.executable)
     parser.add_argument("--policy-server-url", help="Override the driver's OpenPI service URL")
-    parser.add_argument("--skip-service-checks", action="store_true",
-                        help="Skip local model health probes for controlled diagnostics; recorded in agent.log")
     parser.add_argument("--record-video", action=argparse.BooleanOptionalAction, default=True,
                         help="Save rollout.mp4 from the native left camera (enabled by default)")
     parser.add_argument("--max-steps", type=positive_int, help="Override native registry horizon; all control actions share it")
@@ -495,7 +359,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--episode-timeout-s", type=positive_float, default=1800., help="Execution timeout after readiness, shared by continuations")
     parser.add_argument("--ready-timeout-s", type=positive_float, default=300.)
     parser.add_argument("--poll-interval-s", type=positive_float, default=.25)
-    parser.add_argument("--shutdown-grace-s", type=positive_float, default=15.)
+    parser.add_argument("--shutdown-grace-s", type=positive_float, default=90.)
     parser.add_argument("--output-dir", type=Path, help="Fresh output directory; existing directories are never overwritten")
     return parser
 
@@ -503,13 +367,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", args.env_name):
-        parser.error("env-name must be a native task class name")
     args.driver_config = args.driver_config.expanduser().resolve()
     args.agent_config = args.agent_config.expanduser().resolve()
-    for path in (args.driver_config, args.agent_config):
-        if not path.is_file():
-            parser.error(f"Configuration does not exist: {path}")
     # Validate the existing API config without copying or changing it.
     from Emerge.config.loader import load_config
     try:

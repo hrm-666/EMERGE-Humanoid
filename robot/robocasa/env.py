@@ -43,11 +43,6 @@ class RoboCasaEnvManager:
         workspace: str | Path | None = None,
         observation_config: dict[str, Any] | None = None,
     ) -> None:
-        if not isinstance(env_name, str) or not env_name.strip():
-            raise ValueError("env_name must be a non-empty RoboCasa task name")
-        if split not in {None, "target", "pretrain", "all"}:
-            raise ValueError("split must be target, pretrain, all or None")
-        self._validate_seed(seed)
         self.env_name = env_name.strip()
         self.split = split
         self.seed = None if seed is None else int(seed)
@@ -135,7 +130,6 @@ class RoboCasaEnvManager:
     def reset(self, *, seed: int | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
         """Reset once; only an explicitly supplied seed reseeds the Gym env."""
         environment = self._require_environment()
-        self._validate_seed(seed)
         self._clear_observation()
         self._action_steps = 0
         if self._observation_writer is not None:
@@ -432,12 +426,3 @@ class RoboCasaEnvManager:
     def _observation_vector(self, key: str) -> np.ndarray:
         self._require_ready()
         return np.array(self._latest_obs[key], dtype=np.float64, copy=True)
-
-    @staticmethod
-    def _validate_seed(seed: int | None) -> None:
-        if seed is not None and (
-            isinstance(seed, (bool, np.bool_))
-            or not isinstance(seed, (int, np.integer))
-            or seed < 0
-        ):
-            raise ValueError("seed must be a non-negative integer or None")

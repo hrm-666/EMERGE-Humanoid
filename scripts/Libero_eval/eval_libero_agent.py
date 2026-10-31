@@ -1068,6 +1068,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    _install_evaluation_shutdown_handlers()
     parser = _build_parser()
     args = parser.parse_args()
     if args.trials_per_task <= 0:
@@ -1171,9 +1172,6 @@ def main() -> int:
         )
         return 2
     return 0
-
-
-_install_evaluation_shutdown_handlers()
 
 
 if __name__ == "__main__":

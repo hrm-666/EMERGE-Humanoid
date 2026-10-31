@@ -71,11 +71,9 @@ class RoboCasaPolicyExecutor:
     ) -> None:
         self._environment = environment
         self.config = dict(config or {})
-        self.resize_size = self._positive_int(self.config.get("resize_size", 224), "resize_size")
-        self.replan_steps = self._positive_int(self.config.get("replan_steps", 5), "replan_steps")
-        self.publish_every_n_steps = self._positive_int(
-            self.config.get("publish_every_n_steps", self.replan_steps), "publish_every_n_steps"
-        )
+        self.resize_size = int(self.config.get("resize_size", 224))
+        self.replan_steps = max(1, int(self.config.get("replan_steps", 5)))
+        self.publish_every_n_steps = max(1, int(self.config.get("publish_every_n_steps", self.replan_steps)))
         self.stop_on_success = self.config.get("stop_on_success", True)
         self._client = client
         self._owns_client = client is None
@@ -90,11 +88,11 @@ class RoboCasaPolicyExecutor:
     ) -> RoboCasaVLAResult:
         """Execute at most step actions; None instruction uses the native task text.
 
-        Invalid step requests raise ValueError before inference or physics.
+        Step counts use LIBERO's integer conversion and minimum of one.
         Operational errors return a structured result. KeyboardInterrupt and
         other BaseExceptions propagate after best-effort final publication.
         """
-        step = self._positive_int(step, "step")
+        step = max(1, int(step))
         progress = _Progress()
         started = time.perf_counter()
         completed, reason, error_message = False, "error", None
@@ -178,9 +176,6 @@ class RoboCasaPolicyExecutor:
             progress.stage = "action_validation"
             chunk = self._action_chunk(result)
             execute_count = min(len(chunk), self.replan_steps, step - progress.steps)
-            remaining = getattr(self._environment, "remaining_steps", None)
-            if remaining is not None:
-                execute_count = min(execute_count, remaining)
             for action in chunk[:execute_count]:
                 progress.stage = "cancel_check"
                 cancellation = cancel_check() if cancel_check else None
@@ -225,8 +220,6 @@ class RoboCasaPolicyExecutor:
             return False, "environment_terminated", None
         if truncated:
             return False, "environment_truncated", None
-        if getattr(self._environment, "remaining_steps", None) == 0:
-            return False, "max_action_steps", None
         return None
 
     def _publish(self, progress: _Progress) -> None:
@@ -278,9 +271,3 @@ class RoboCasaPolicyExecutor:
             close = getattr(client, "close", None)
             if callable(close):
                 close()
-
-    @staticmethod
-    def _positive_int(value: Any, name: str) -> int:
-        if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)) or value <= 0:
-            raise ValueError(f"{name} must be a positive integer")
-        return int(value)

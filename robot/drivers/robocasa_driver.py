@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
@@ -13,8 +12,6 @@ from robot.robocasa.actions import RoboCasaActionController
 from robot.robocasa.env import RoboCasaEnvManager
 from robot.robocasa.env_eval import RoboCasaEvalEnvManager
 from robot.vla.robocasa_policy_executor import RoboCasaPolicyExecutor
-
-logger = logging.getLogger(__name__)
 
 
 class RoboCasaDriver(BaseDriver):
@@ -161,11 +158,5 @@ class RoboCasaDriver(BaseDriver):
         self._closed = True
         try:
             self._vla.close()
-        except BaseException:
-            try:
-                self._environment.close()
-            except BaseException:
-                logger.exception("Could not close RoboCasa environment after executor cleanup failed")
-            raise
-        else:
+        finally:
             self._environment.close()
