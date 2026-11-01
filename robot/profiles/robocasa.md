@@ -2,219 +2,248 @@
 
 Driver: `robocasa`
 
-The embodiment uses a PandaOmron mobile manipulator in RoboCasa. The driver
-supports `vla_execute`, `move_to_pose`, `move_linear`, and `set_gripper`.
+This embodiment uses RoboCasa's PandaOmron mobile manipulator. The driver supports
+`vla_execute`, `move_to_pose`, `move_linear`, and `set_gripper`.
 Use `object_location` and `task_verification` to inform planning and check outcomes.
 
-## Plan Management
+**Remember to keep the plan up to date.**
 
-Keep the plan current with the task's phases. Preserve every required object,
-destination, relation, and final fixture state from the original instruction.
-Before the first robot action, inspect the current scene using the visual tools
-and resolve ambiguous targets or prerequisites. Use `task_verification` when
-visibility, grasp state, or a fixture's state is unclear.
-
-After each phase, update the plan from fresh observations and execution history.
-Advance a phase only when its required outcome is supported by evidence.
+Update and review the plan as execution progresses through its phases.
 
 ## Success Check
 
-After every `execute_robot_action`, re-read `ROBOT_STATE.md`. If the fresh
-`robots.robocasa.success` value is `true`, stop immediately. Otherwise,
-reassess the current subgoal using `task_verification` when needed.
+After every `execute_robot_action`, re-read `ROBOT_STATE.md`.
+If the fresh `robots.robocasa.success` value is `true`, stop immediately.
+Otherwise reassess the current subgoal, using `task_verification` when needed.
+Action completion does not establish task success.
 
-`last_execution.completed` means that a call finished or reached the goal;
-using up the requested steps alone does not establish task success. Visual
-verification guides planning; the environment's `success` flag determines
-benchmark success. If verification suggests completion while `success` remains
-`false`, review unmet task conditions before choosing the next action.
+If `robots.robocasa.done` is `true` or `robots.robocasa.ready` is `false`,
+stop sending robot actions.
 
-For geometric motion, completion means that the requested pose converged.
-For `set_gripper`, it means the command was applied for the requested steps;
-it does not prove a grasp, release, or exact finger opening. `last_execution`
-also reports `action_type` and, for geometric actions, `position_error_m` and
-`rotation_error_rad` when a post-action measurement is available.
+## Task Routes
 
-If `done` is true or `ready` is false, stop sending robot actions for this
-episode. Inspect `evaluation.termination_reason`, `evaluation.error_message`,
-`setup_error`, and `last_execution.error_message` / `last_execution.error_stage`
-when present. An error or cancellation may follow actions that already executed;
-inspect `last_execution.total_steps` and current images before replanning.
-A failed observation publication may leave older images, so check the manifest's
-`episode_id` and `revision` before treating them as evidence of the latest action.
-
-## Task Route
-
-Choose the applicable route before the first robot action. Multi-stage tasks
-may combine the routes, with prerequisite states checked before each phase.
-
-### Current Control Capability
-
-Use the `attach` skill through `move_to_pose`, `move_linear`, and `set_gripper`
-for measured coarse approach, lifting, and clear-space transport. Use VLA for
-fine visual manipulation. Geometric actions command zero base velocity and
-zero torso increment; they do not plan base repositioning or collision avoidance.
-If the target is not reachable from the current stance, reassess or use an
-appropriate VLA phase rather than repeatedly increasing a geometric budget.
-`follow_arc` is not implemented; do not call it.
+Choose the applicable route for the current subgoal. Organize composite tasks
+into phases according to the original instruction. Continue from the state
+already reached, retaining all unfinished object, spatial-relation, and
+appliance-state requirements.
 
 ### Fixed Structures and Large Destinations
 
-Identify the actual cabinet, drawer, appliance, sink, shelf, or destination
-from the task and current images. Distinguish identical structures using their
-location, appearance, and relation to visible reference objects. Use scene
-evidence rather than assuming LIBERO fixture names or placement regions.
+Identify the target structure and its actual interaction parts from the task
+and current scene:
 
-Before approaching a confined destination or moving an object beside or
-through a structure, call `object_location` for the relevant visible object,
-destination, and clearance-critical structure. Use returned `position_m` and
-`size_m`, when successfully measured, to reason about full spatial extents,
-access, and clearance. Do not infer an occluded interior's free space from the
-fixture's outer bounding box. If access or structure state is unclear, call
-`task_verification` before acting.
+- Cabinets, drawers, and refrigerators: distinguish doors, drawers, interior
+  spaces, and specified shelves.
+- Microwaves and toaster ovens: distinguish doors, interior placement regions,
+  start buttons, and timer knobs.
+- Dishwashers: distinguish doors, sliding racks, and dish-placement regions.
+- Stoves: distinguish the target burner and its controlling knob.
+- Sinks: distinguish the basin, water outlet, and faucet controls.
+- Coffee machines: distinguish the cup-placement region and start button.
+- Other appliances: distinguish the blender lid and jar opening, stand-mixer
+  head, electric-kettle switch, and toaster slots and lever as required.
+- Counters, dining tables, and containers: identify the final supporting surface
+  or the interior of a basket, tray, bowl, cup, pot, or other container.
 
-Let VLA handle visual approach, handle contact, and opening or closing an
-articulated structure as a coherent phase. Verify the resulting state before
-starting a phase that depends on it. When the task requires a final door,
-drawer, or appliance state, retain that requirement in the plan.
-Use attach only for measured clear-space motion; do not use it to pull an
-articulated structure, push an ungrasped object into place, or recover uncertain
-contact with a cabinet, drawer, door, or handle.
+Before approaching these structures or carrying an object beside, above, or
+through them, call `object_location` to measure the relevant objects and
+structures' `position_m` and `size_m`. Plan around their full spatial extent,
+leaving clearance for the gripper and held object. A structure's overall bounding
+box does not establish its usable interior space.
 
-When a relation such as "initially in the drawer" only identifies a movable
-object, it does not itself require opening or closing the drawer. If the
-object is visible and accessible, localize it directly. Act on the structure
-only when access or an explicit task condition requires it.
+Let VLA handle visual approach, handle contact, opening or closing doors,
+pulling drawers or racks, pressing buttons, and turning knobs as coherent
+phases. Use attach for measured motion through clear space.
+
+When a relation such as "initially inside the drawer or cabinet" only identifies
+an object that is already visible and accessible, locate it directly. Operate
+the structure only when access requires it or the task explicitly requests it.
 
 ### Movable-Object Tasks
 
-Use the following route for an ordinary pick-and-place task with the current
-driver:
+For ordinary pick-and-place tasks, use:
 
-`localize object -> attach approach -> VLA grasp -> verify grasp -> localize destination -> attach lift and transport -> VLA place -> verify placement`
+`locate object -> attach approach -> VLA grasp -> locate destination -> attach lift and transport -> VLA placement`
 
-After successful localization, use attach when measured geometry supports a
-reachable clear path and a useful pre-manipulation pose. Leave approach to VLA
-when selecting a reliable wrist orientation would otherwise require guessing.
-Do not substitute speculative coordinates when localization fails.
+Maintain the same target instance. When transporting bowls, baskets, trays,
+pots, or other containers holding food or objects, preserve the required
+orientation and contents. Leave final alignment, contact, and release to VLA.
 
-Bind the source object before moving it. Verify that the intended object is
-held before transporting it; proximity of the gripper alone does not prove a
-grasp. Inspect destination geometry and access before transport. After placing,
-verify release and the requested support or containment relation. Keep any
-additional task requirements in the plan.
+Call `task_verification` when target identity, grasp state, access, or a phase's
+outcome is unclear. When the outcome is clear, continue to the next phase without
+inserting a verification call at every transition.
+
+### Continuous-Contact and Composite Tasks
+
+Let VLA perform washing, scrubbing, stirring, pouring, and similar operations as
+coherent phases with complete action semantics. Merely moving a tool near the
+target does not complete these operations.
+
+Connect the routes above according to the original composite-task instruction.
+For example, load food before carrying its container, place the cup before
+starting the coffee machine, and load dishes before closing the dishwasher.
+Preserve required object counts, categories, relative positions, container
+contents, and final door or switch states. After a failure, recover the
+unfinished phases from the current state.
 
 ## Target Identity
 
-For an ambiguous target, combine:
+For ambiguous targets, combine:
 
-`object class + visual signature + original task relation`
+`object category + visual features + original task relation`
 
 ### Object Appearance Hints
 
-Use attributes actually visible in the current RoboCasa scene: shape, size,
-color, texture, handles, spouts, packaging, and readable labels. Combine cues
-rather than relying on color alone. A task category may have different visual
-instances across episodes; do not reuse LIBERO product appearances as facts.
-If the views cannot establish identity, report the ambiguity and request visual
-verification rather than inventing a distinguishing attribute.
+Use these hints to support identification. Combine the current instance's
+shape, color, texture, labels, and original task relation. Do not treat one
+model's color scheme as a fixed property of its entire category.
+
+- **Mug (`mug`):** An open cup body with a side handle; plain and printed models
+  exist. Do not assume it is white or confuse it with a handleless drinking glass.
+- **Drinking cup / glass (`cup` / `glass_cup`):** A handleless open vessel, often
+  cylindrical or wider at the top. Both transparent and opaque models exist;
+  transparency alone does not identify the target.
+- **Bowl (`bowl`):** An open container with noticeable depth and curved sidewalls
+  forming a cavity. Distinguish it from a shallow plate, tray, or inverted lid.
+- **Plate (`plate`):** A shallow, wide, circular dish with a low rim; plain and
+  patterned models exist.
+- **Colander (`colander`):** A bowl-like container with dense holes or mesh in its
+  walls or bottom, sometimes with side handles or feet; not a solid bowl.
+- **Food-storage container (`tupperware`):** A relatively deep open box, often
+  rectangular, with clear sidewalls and interior space; not a low-sided tray.
+- **Tray (`tray`):** A broad, shallow, flat carrying surface with low edges,
+  sometimes with handles; not a deep food-storage box or rimless cutting board.
+- **Basket (`basket`):** A relatively deep carrying space, with wire-mesh and
+  woven models in round or rectangular shapes. Do not identify it solely by
+  brown coloring or one particular weave.
+- **Pan (`pan`):** A shallow circular body with a long side handle; distinguish
+  it from a plate or deep pot.
+- **Pot (`pot`):** A relatively deep body with side handles or loop handles;
+  distinguish it from pans and bowls using wall depth and handle shape.
+- **Non-electric kettle (`kettle_non_electric`):** A body with a spout and a top
+  or side handle, in metal or ceramic variants; not a coffee machine, cup, or
+  electric kettle with a powered base.
+
+- **Cutting board (`cutting_board`):** A flat board, often rectangular or
+  rounded-rectangular with wood grain and a flat main surface; not a rimmed tray
+  or digital scale with a display.
+- **Digital scale (`digital_scale`):** A base with a weighing platform, display,
+  and controls; do not mistake a nearby board or ordinary tray for its platform.
+- **Knife (`knife`):** A handle joined to a relatively long, flat blade; not a
+  thin straw, utensil handle, or food skewer.
+- **Peeler (`peeler`):** A handle joined to an open blade frame, including
+  Y-shaped models; not a knife with a continuous long blade.
+- **Spatula (`spatula`):** A long handle ending in a broad, flat head; not a
+  spoon or ladle with a concave head.
+- **Fork / spoon / ladle (`fork` / `spoon` / `ladle`):** Identify them by tines,
+  a shallow concave head, or a deep scooping head respectively. Color and handle
+  length alone do not determine the category.
+- **Tongs / whisk (`tongs` / `whisk`):** Tongs have opposing arms; a whisk ends
+  in wire loops or a cage-like structure rather than a solid spatula head.
+- **Sponge (`sponge`):** A thick, porous object, with green-yellow layered,
+  single-color, and rounded models; not thin food or a sharply edged ice cube.
+- **Straw (`straw`):** A very thin tube, sometimes bent, with varying colors;
+  distinguish it from a knife, utensil handle, or skewer carrying food.
+
+- **Bread (`bread`):** Includes round loaves and irregular pieces with a baked
+  crust, cracks, or scoring; do not assume all bread is square sandwich bread.
+- **Sandwich bread (`sandwich_bread`):** A flat, roughly square slice with a
+  pale center and darker crust; not a whole loaf or hotdog bun.
+- **Croissant (`croissant`):** Golden to brown, with rolled layers and transverse
+  surface texture; may be crescent-shaped or short and spindle-shaped, unlike
+  a round cupcake.
+- **Baguette / hotdog bun (`baguette` / `hotdog_bun`):** Both may be elongated.
+  Baguettes often have surface scoring; hotdog buns have a lengthwise split.
+  Distinguish them using the actual cuts and task name.
+- **Pancake / waffle (`pancake` / `waffle`):** Pancakes are flat round cakes or
+  stacked layers, sometimes with toppings; waffles have a distinct grid pattern.
+- **Cupcake (`cupcake`):** A cup-shaped cake body or paper liner, sometimes
+  topped with raised cream, frosting, or decorations; not stacked pancakes.
+- **Sausage / kebab skewer (`sausage` / `kebab_skewer`):** A sausage is one
+  continuous elongated meat product; a kebab has a rod through separate food
+  pieces. Do not identify them only by their elongated outline.
+- **Chicken drumstick (`chicken_drumstick`):** A thick meaty end tapering toward
+  a leg bone or bone handle; not a sausage of relatively uniform thickness.
+- **Steak (`steak`):** A flat or thick meat cut with visible meat texture, fat
+  edges, or grill marks. Raw and cooked variants differ in color; red or brown
+  coloring alone is insufficient.
+
+- **Lettuce (`lettuce`):** Wrinkled leaves, layered edges, or visible veins,
+  in whole-head or leaf-like variants; not broccoli's dense flower buds.
+- **Broccoli (`broccoli`):** A dense, granular crown with a thick stalk, unlike
+  lettuce's spreading or curled leaves.
+- **Carrot (`carrot`):** A mainly orange, elongated tapered root, sometimes with
+  a green top; distinguish it from a cucumber with relatively rounded ends.
+- **Cucumber / eggplant (`cucumber` / `eggplant`):** Cucumbers are often elongated
+  with rounded ends and may have longitudinal texture. Eggplants may be long
+  or round and typically have a distinct calyx. Combine shape, skin, and task name.
+- **Strawberry (`strawberry`):** Mainly red with dense surface seeds and a conical
+  or heart-like outline; a green leafy crown is not clearly visible on every model.
+- **Lemon wedge (`lemon_wedge`):** Fan-shaped or wedge-shaped flesh with peel on
+  the curved edge. This asset library includes green models; do not exclude one
+  because it is not yellow.
+- **Ice cube (`ice_cube`):** A white or translucent angular block, often roughly
+  cubic; not a porous sponge or a piece of fruit with peel.
+
+- **Ketchup / condiment bottle (`ketchup` / `condiment_bottle`):** Combine sauce
+  color, bottle outline, cap, and readable label; flat bottles, slender bottles,
+  and different packaging exist.
+- **Shaker (`shaker`):** Often a relatively short container; examine the dispensing
+  lid and body rather than relying only on color to distinguish it from a bottle.
+- **Jam (`jam`):** A lidded jar or cup of food, including glass jars and plastic
+  cups. Combine the label, lid, and contents; do not assume transparency or a
+  checkered lid.
+- **Bottled water (`bottled_water`):** Often has a screw cap, body ribs, and a
+  wraparound label; a transparent bottle alone does not establish bottled water.
+- **Alcohol (`alcohol`):** Includes beer, wine, and other instances with varying
+  bottle shapes, colors, and labels. Use the neck, cap, label, and task reference
+  group to distinguish them from bottled water.
+- **Boxed / bagged food (`boxed_food` / `bagged_food`):** Identify rigid boxes
+  versus flexible bags; determine the actual food from readable labels and the
+  original instruction.
+
+- **Blender lid:** A flat lid matching the blender jar opening, sometimes with
+  a central protrusion or knob; not the jar, appliance base, or a nearby plate.
 
 ### Identity Binding and Tracking
 
-- Bind an instance using its original task relation, such as "the mug initially
-  beside the sink" or "the bowl initially in the left cabinet".
-- Bind visually identical objects by their initial relation and location.
-  Preserve initial left/right roles when the task uses them to identify objects;
-  a changed camera or robot viewpoint does not redefine those roles.
+- Bind an instance using its original task relation, such as "the cup initially
+  beside the sink" or "the bowl initially inside the left cabinet".
+- Bind visually identical objects using their initial relations and positions.
+  When initial left/right relations identify objects, retain those roles;
+  changing the camera or robot viewpoint does not redefine them.
 - After an object moves, track the same instance through observed motion,
-  action history, and its last known location.
-- Another same-class object near the source does not invalidate an identity
-  already tracked through motion.
-- If continuity is lost, re-establish it from evidence and action history.
-  Do not invent a visual difference or silently switch instances.
+  action history, and its last known position.
+- Another object of the same category near the source does not invalidate an
+  identity already established through motion tracking.
+- If tracking continuity is lost, re-establish identity from evidence and action
+  history. Do not invent visual differences or silently switch instances.
 
 ### Identity Information for Subagents
 
-Make every `object_location` and `task_verification` request self-contained;
-do not assume the specialist inherits this profile or the full action history.
-Include the target's observed appearance, original task relation, reference
-objects, exclusions, and relevant movement history. A category name such as
-cup, bowl, or bottle alone is insufficient when several candidates exist.
+The `object_location` specialist does not inherit this profile. Every request
+must be self-contained: provide the target's appearance, original task relation,
+relevant movement history, and necessary exclusions. Category names such as
+cup, bowl, or bottle alone are insufficient. Use the same identity information
+in `task_verification` requests.
 
-Each VLA instruction describes the current coherent action phase while
-preserving the original object's identity and required destination relation.
-Do not include unrelated later phases. If the selected checkpoint explicitly
-requires the complete task sentence, follow that requirement instead of
-rewriting it into phase instructions.
+## RoboCasa Control Conventions
 
-## Tool Responsibilities
+This embodiment uses the official episode instruction. Copy
+`robots.robocasa.task.instruction` exactly into every `vla_execute` call; keep
+the current local phase in `PLAN.md` and the action reasoning rather than
+rewriting the policy prompt. `step` is a positive policy action budget.
 
-- `object_location`: identify and localize the current source, destination,
-  or clearance-critical structure from calibrated views. Treat `found: false`
-  as unlocated; never substitute guessed coordinates.
-- `attach`: use measured geometry for coarse approach, lifting, and transport
-  through the supported geometric actions. Leave final contact to VLA.
-- `vla_execute`: perform grasping, final alignment, placement, and visually
-  guided structure interaction. Use it for approach or transport when a reliable
-  geometric route cannot be established.
-- `task_verification`: check task relations, grasp and release, accessibility,
-  and uncertain structure states. An uncertain result is not confirmation.
+Follow the attach and VLA skills for action parameters, step budgets, and recovery.
 
-### Geometric Actions and Gripper Continuity
+Geometric actions use world coordinates in metres. The target position refers
+to the end-effector grip site, not the object center. Read the current end-effector
+pose from `eef_pose_world`; quaternions use XYZW order. Do not use
+`eef_pose_relative` directly as a world-frame target.
 
-All geometric positions and deltas use world coordinates in metres. Targets
-refer to the EEF grip site, not an object's center. Derive them from current
-measured geometry or the calibrated `eef_pose_world` state. The optional
-`frame` parameter accepts only `world`.
+Geometric motion preserves the last executed gripper command by default,
+including after VLA. If `last_gripper_close` is `null`, explicitly provide
+`gripper_command` (`open` / `close`) based on the current grasp state. Keep the
+gripper closed while carrying an object; do not open it merely to initialize it.
 
-- `move_to_pose`: provide `position_m`, either `orientation_quat` (XYZW) or
-  `orientation_euler` (roll/pitch/yaw radians), and positive integer `steps`.
-  Reuse `eef_pose_world.orientation_quat_xyzw` to preserve the current wrist
-  orientation when no change is required.
-- `move_linear`: provide exactly one of `position_m` or `delta_m`, plus positive
-  integer `steps` and non-negative integer `settle_steps`. Orientation is optional;
-  omitting it preserves the initial wrist orientation. Both interpolation and
-  final settling consume the episode budget. Keep their sum at most 100 steps
-  per attach request, following the attach skill's motion-budget guidance.
-- `set_gripper`: provide `command` as `open` or `close`, plus positive integer
-  `steps`. Continuous `opening_m` and `width_m` targets are unsupported.
-
-Motion preserves the latest applied `last_gripper_close` command, including
-after VLA. If it is `null`, explicitly initialize with `set_gripper`, or pass
-`gripper_command` (`open` / `close`) on the motion. Choose from the current
-observed grasp state; verify uncertainty first. Never initialize a held object
-by opening the gripper. Ordinary transport should retain the closing command,
-not override it with `gripper_command` set to `open`.
-
-### VLA Calls and Recovery
-
-Always supply a non-empty `instruction` and a positive integer `step` to
-`vla_execute`. `prompt` is an accepted alias; if both are supplied they must
-agree. Choose a bounded step request for the current phase and inspect the
-result before continuing. Respect `remaining_steps` when evaluation exposes it;
-the driver enforces the episode budget. A step request is not a task-success
-claim.
-
-After an interruption or unsuccessful phase, read the new state and available
-observations, verify the current relation, and revise the instruction or plan.
-Do not blindly repeat an action that may already have changed the scene. Stop
-if the episode has ended or the environment is unavailable.
-
-## Observation and Coordinate Conventions
-
-Use the latest `artifacts/observations/observation.json` for visual tools.
-It lists the available calibrated views and `reference_view`; image paths are
-relative to the workspace. Current publications contain RGB only
-(`rgbd: false`). Missing or occluded evidence does not establish a task relation.
-
-Localization uses the observation manifest's `coordinate_frame` (`world` in
-this adapter). Camera optical axes are +X right, +Y down, +Z forward;
-`T_world_camera` maps camera points into world coordinates, in metres.
-
-`eef_pose_world` reports world position and XYZW orientation of the same grip
-site used by geometric control. `base_pose` is also in world coordinates.
-`eef_pose_relative` is the native policy observation relative to the robot base;
-its position comes from the site and orientation from the body. Do not use that
-legacy pair as a calibrated site transform or directly as world-frame targets.
-Workspace `objects` are perception annotations; editing them does not move
-simulated objects.
+`set_gripper` supports only `open` and `close`, not continuous opening targets.
