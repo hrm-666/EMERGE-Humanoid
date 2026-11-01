@@ -61,13 +61,13 @@ class RoboCasaActionController:
     """Dispatch VLA requests and execute world-frame geometric requests."""
 
     _DEFAULTS = {
-        "position_gain": .5,
-        "rotation_gain": .5,
+        "position_gain": 1.,
+        "rotation_gain": 1.,
         "position_tolerance_m": .005,
         "rotation_tolerance_rad": .05,
-        "max_steps": 100,
-        "move_linear_steps": 40,
-        "settle_steps": 30,
+        "max_steps": 160,
+        "move_linear_steps": 80,
+        "settle_steps": 40,
         "gripper_steps": 30,
         "publish_every_n_steps": 5,
     }
