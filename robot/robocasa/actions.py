@@ -48,6 +48,10 @@ class _Progress:
     truncated: bool = False
     position_error: float | None = None
     rotation_error: float | None = None
+    orientation_requested: bool = True
+    best_position_error: float = float("inf")
+    stall_steps: int = 0
+    stalled: bool = False
 
 
 class _Stopped(Exception):
@@ -63,14 +67,17 @@ class RoboCasaActionController:
     _DEFAULTS = {
         "position_gain": 1.,
         "rotation_gain": 1.,
-        "position_tolerance_m": .005,
-        "rotation_tolerance_rad": .05,
+        "position_tolerance_m": .02,
+        "rotation_tolerance_rad": .15,
         "max_steps": 160,
         "move_linear_steps": 80,
         "settle_steps": 40,
         "gripper_steps": 30,
         "publish_every_n_steps": 5,
     }
+
+    _NO_PROGRESS_STEPS = 10
+    _NO_PROGRESS_EPSILON_M = .001
 
     def __init__(
         self, environment: RoboCasaEnvManager, config: dict[str, Any] | None = None,
@@ -106,6 +113,7 @@ class RoboCasaActionController:
             spec = self._environment.get_arm_control_spec()
             progress.stage = "geometry"
             start, start_quaternion = self._environment.get_eef_pose_world()
+            progress.orientation_requested = bool(request["orientation_requested"])
             if action_type == "set_gripper":
                 target, quaternion = start, start_quaternion
             else:
@@ -123,16 +131,37 @@ class RoboCasaActionController:
                 completed, reason = True, "gripper_command_applied"
             elif self._converged(target, quaternion, progress):
                 completed, reason = True, "pose_reached"
-            else:
-                if action_type == "move_linear":
-                    for index in range(request["steps"]):
-                        waypoint = start + (target - start) * ((index + 1) / request["steps"])
-                        self._advance(waypoint, quaternion, gripper, spec, progress, cancel_check)
-                    servo_steps = request["settle_steps"]
+            elif action_type == "move_linear":
+                for index in range(request["steps"]):
+                    waypoint = start + (target - start) * ((index + 1) / request["steps"])
+                    self._advance(waypoint, quaternion, gripper, spec, progress, cancel_check)
+                    self._track_progress(progress, target, quaternion)
+                    if progress.stalled:
+                        break
+                if progress.stalled:
+                    completed, reason = True, "approached"
                 else:
-                    servo_steps = request["steps"]
-                completed = self._servo(target, quaternion, gripper, spec, servo_steps, progress, cancel_check)
-                reason = "pose_reached" if completed else "not_converged"
+                    completed = self._servo(
+                        target, quaternion, gripper, spec, request["settle_steps"],
+                        progress, cancel_check, watch_progress=True,
+                    )
+                    if completed:
+                        reason = "pose_reached"
+                    elif progress.stalled:
+                        completed, reason = True, "approached"
+                    else:
+                        reason = "not_converged"
+            else:
+                completed = self._servo(
+                    target, quaternion, gripper, spec, request["steps"],
+                    progress, cancel_check, watch_progress=True,
+                )
+                if completed:
+                    reason = "pose_reached"
+                elif progress.stalled:
+                    completed, reason = True, "approached"
+                else:
+                    reason = "not_converged"
         except _Stopped as exc:
             completed, reason, message = exc.reason == "goal_reached", exc.reason, exc.message
             if reason in {"error", "environment_unavailable", "gripper_uninitialized"}:
@@ -175,7 +204,7 @@ class RoboCasaActionController:
         request = {
             "steps": max(1, int(params.get("steps", self.config[default_steps[action_type]]))),
             "settle_steps": 0, "relative": False, "position": None, "orientation": None,
-            "gripper": None,
+            "orientation_requested": True, "gripper": None,
         }
         if action_type == "set_gripper":
             request["gripper"] = self._gripper_command(params.get("command"))
@@ -189,10 +218,9 @@ class RoboCasaActionController:
                        for key, keys in (("orientation_quat", "xyzw"), ("orientation_euler", ("roll", "pitch", "yaw")))
                        if key in params}
         request["orientation"] = PoseUtils.resolve_orientation(orientation)
-        if action_type == "move_to_pose" and request["orientation"] is None:
-            raise ValueError("move_to_pose requires orientation_quat or orientation_euler")
+        request["orientation_requested"] = request["orientation"] is not None
         if action_type == "move_linear":
-            request["settle_steps"] = max(0, int(params.get("settle_steps", self.config["settle_steps"])))
+            request["settle_steps"] = max(0, int(self.config["settle_steps"]))
         return request
 
     def _check_stop(self, progress: _Progress, cancel_check: Callable[[], str | None] | None) -> None:
@@ -226,20 +254,46 @@ class RoboCasaActionController:
 
     def _converged(self, target: np.ndarray, quaternion: np.ndarray, progress: _Progress) -> bool:
         self._measure(target, quaternion, progress)
+        if progress.position_error > self.config["position_tolerance_m"]:
+            return False
         return (
-            progress.position_error <= self.config["position_tolerance_m"]
-            and progress.rotation_error <= self.config["rotation_tolerance_rad"]
+            not progress.orientation_requested
+            or progress.rotation_error <= self.config["rotation_tolerance_rad"]
         )
+
+    def _track_progress(
+        self, progress: _Progress, target: np.ndarray, quaternion: np.ndarray,
+    ) -> None:
+        """Stop early when a target is unreachable and the arm can no longer improve.
+
+        The tracked error is measured against the final target, not a moving
+        waypoint, so normal waypoint lag is not mistaken for a stall.
+        """
+        self._measure(target, quaternion, progress)
+        error = progress.position_error
+        if error < progress.best_position_error - self._NO_PROGRESS_EPSILON_M:
+            progress.best_position_error = error
+            progress.stall_steps = 0
+        else:
+            progress.stall_steps += 1
+        if (progress.stall_steps >= self._NO_PROGRESS_STEPS
+                and error > self.config["position_tolerance_m"]):
+            progress.stalled = True
 
     def _servo(
         self, target: np.ndarray, quaternion: np.ndarray, gripper: bool | None,
         spec: dict[str, Any], steps: int, progress: _Progress,
         cancel_check: Callable[[], str | None] | None,
+        *, watch_progress: bool = False,
     ) -> bool:
         for _ in range(steps):
             if self._converged(target, quaternion, progress):
                 return True
             self._advance(target, quaternion, gripper, spec, progress, cancel_check)
+            if watch_progress:
+                self._track_progress(progress, target, quaternion)
+                if progress.stalled:
+                    return False
         # Inspect the actual state after the final allowed action as well.
         return self._converged(target, quaternion, progress)
 
@@ -254,7 +308,11 @@ class RoboCasaActionController:
         if gripper is None:
             progress.stage = "gripper_state"
             raise _Stopped("gripper_uninitialized", "use set_gripper or an explicit gripper_command before motion")
-        delta = np.r_[position_error * self.config["position_gain"], rotation_error * self.config["rotation_gain"]]
+        rotation_delta = (
+            rotation_error * self.config["rotation_gain"]
+            if progress.orientation_requested else np.zeros(3)
+        )
+        delta = np.r_[position_error * self.config["position_gain"], rotation_delta]
         if spec["input_ref_frame"] == "base":
             progress.stage = "control_frame"
             rotation = self._environment.get_arm_control_frame()[:3, :3]
