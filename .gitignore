@@ -34,3 +34,4 @@ logs/
 *.pt
 .DS_Store
 tests
+CLAUDE.md
