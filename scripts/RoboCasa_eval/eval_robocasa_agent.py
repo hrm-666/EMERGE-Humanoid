@@ -84,7 +84,12 @@ def prepare_episode(args: argparse.Namespace, directory: Path) -> Path:
     if args.policy_server_url:
         config["vla"]["server_url"] = args.policy_server_url
     evaluation = config.setdefault("evaluation", {})
-    evaluation.update(enabled=True, status_path=str(directory / "status.json"))
+    evaluation.update(
+        enabled=True,
+        status_path=str(directory / "status.json"),
+        # Structured per-action diagnostics for motion/localization analysis.
+        action_metrics_path=str(directory / "action_metrics.jsonl"),
+    )
     if args.max_steps is not None:
         evaluation["max_action_steps"] = args.max_steps
     evaluation.pop("metadata", None)

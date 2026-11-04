@@ -71,6 +71,7 @@ RoboCasa 保留 `gym.make(seed=...)` 及既有 reset 流程，不引入 LIBERO �
   driver_config.json    # 本次仿真配置
   status.json           # Controller 写入的官方环境状态，位于 agent workspace 之外
   result.json           # 沿用 LIBERO 字段结构的最终成绩
+  action_metrics.jsonl  # 每个动作的结构化精度诊断（position/rotation error、reason）
   rollout.mp4           # H.264 视频，默认录制
   controller.log
   agent.log
@@ -90,6 +91,14 @@ RoboCasa 保留 `gym.make(seed=...)` 及既有 reset 流程，不引入 LIBERO �
 `result.json` 沿用 LIBERO 单 episode 结果的字段结构：schema、episode 标识、任务信息、指令、成功标志、结束原因、步数及预算、agent 继续反馈次数、运行目录、耗时与起止时间，以及 `action_count`、`actions_by_type`、`actions_by_status` 动作统计。任务信息使用 RoboCasa 的 `env_name`、`split`、`seed`，不套用 LIBERO 的 `suite`、`task_id`、`trial`。不再另加 `outcome`、`video_path`、顶层异常信息或嵌套整份运行状态。
 
 `status.json` 是覆盖更新的进程通信文件，顶层字段与 LIBERO 一致：`schema_version`、`ready`、`success`、`done`、`reward`、`environment_steps`、`settling_steps`、`action_steps`、`max_action_steps`、`termination_reason`、`metadata`。RoboCasa 没有额外初始化 settling 动作，因此 `settling_steps=0`、`environment_steps=action_steps`；几何动作中的保持步数仍计入 `action_steps`。任务名、split、seed、原生指令与异常详情放在 `metadata` 中。
+
+`action_metrics.jsonl` 每个动作追加一行，记录 `action_type`、`reason`、`completed`、`position_error_m`、`rotation_error_rad`、`total_steps`、`action_steps`、`environment_success` 等字段，仅用于离线精度分析，不影响控制与成功判定。聚合方式：
+
+```bash
+python scripts/RoboCasa_eval/summarize_action_metrics.py <结果根目录> [--csv actions.csv]
+```
+
+输出按动作类型统计的 count / completed / failed / error、位置误差 median/p90/max、旋转误差 p90，以及 `approached` 残差分布。
 
 与 LIBERO 一样，结果中的 `termination_reason` 以 `infrastructure_error:` 前缀标记环境、服务或进程错误；`success` 表示环境成功，`max_action_steps`、`episode_timeout` 等表示任务未完成，`interrupted` 表示用户中断。初始化 NaN 等错误仍与策略失败分开判定。`controller.log` 和 `agent.log` 完整保留，启动器的异常诊断附加到 `agent.log`。每轮 headless 的 `agent_runs/<run_id>/result.json` 继续使用通用运行时原有格式。
 

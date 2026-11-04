@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from copy import deepcopy
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +15,8 @@ from robot.robocasa.actions import RoboCasaActionController
 from robot.robocasa.env import RoboCasaEnvManager
 from robot.robocasa.env_eval import RoboCasaEvalEnvManager
 from robot.vla.robocasa_policy_executor import RoboCasaPolicyExecutor
+
+logger = logging.getLogger(__name__)
 
 
 class RoboCasaDriver(BaseDriver):
@@ -47,6 +52,13 @@ class RoboCasaDriver(BaseDriver):
         native = dict(robocasa or {})
         eval_config = dict(evaluation or {})
         enabled = eval_config.pop("enabled", False)
+        # Per-action diagnostics are written by this driver, not by the
+        # environment manager, so keep the path out of eval_config.
+        metrics = eval_config.pop("action_metrics_path", None)
+        self._action_metrics_path: Path | None = None
+        if metrics:
+            path = Path(metrics).expanduser()
+            self._action_metrics_path = path if path.is_absolute() else self._workspace / path
         common = dict(
             **native,
             camera_config=dict(cameras or {}),
@@ -100,8 +112,12 @@ class RoboCasaDriver(BaseDriver):
         try:
             result = self._actions.execute(action_type, params, cancel_check=cancel_check)
         except Exception as exc:
+            self._record_action_metrics(
+                action_type, params, error=f"{type(exc).__name__}: {exc}"
+            )
             return f"Failed: {type(exc).__name__}: {exc}"
         self._last_execution = {"action_type": action_type, **asdict(result)}
+        self._record_action_metrics(action_type, params)
         label = "VLA execution" if action_type == "vla_execute" else action_type
         summary = (
             f"steps={result.total_steps}, task_success={str(result.task_success).lower()}, "
@@ -116,6 +132,43 @@ class RoboCasaDriver(BaseDriver):
             return f"{label} finished: {summary}"
         detail = f"; {result.error_message}" if result.error_message else ""
         return f"Failed: RoboCasa {label}; {summary}{detail}"
+
+    def _record_action_metrics(
+        self, action_type: str, params: dict, *, error: str | None = None
+    ) -> None:
+        """Append one structured action record for offline accuracy analysis.
+
+        This is diagnostics only: it writes after the action has already
+        completed and never changes the controller's result or success signal.
+        """
+        path = self._action_metrics_path
+        if path is None:
+            return
+        try:
+            check_success = bool(self._environment.check_success())
+        except Exception:
+            check_success = None
+        try:
+            action_steps = int(self._environment.action_steps)
+        except Exception:
+            action_steps = None
+        record: dict[str, Any] = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "action_type": action_type,
+            "parameters": deepcopy(params),
+            "action_steps": action_steps,
+            "environment_success": check_success,
+        }
+        if error is not None:
+            record["error"] = error
+        elif self._last_execution is not None:
+            record.update(self._last_execution)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, default=str) + "\n")
+        except OSError as exc:
+            logger.warning("failed to append action metrics to %s: %s", path, exc)
 
     def get_runtime_state(self) -> dict[str, Any]:
         """Publish native frame names under the EMERGE robots.robocasa key.
