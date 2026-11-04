@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -71,15 +72,19 @@ class VggtCameraRig:
         look_at: np.ndarray,
         camera_settings: dict[str, dict[str, Any]],
         azimuth_offset_deg: float = 0.0,
+        layout: Mapping[str, tuple[float, float]] | None = None,
     ) -> dict[str, CameraPose]:
         """Plan the same rig from explicit world bounds for another simulator.
 
         The optional azimuth rotates the entire rig toward a workspace's
         accessible side. LIBERO retains its original zero-offset calculation.
-        This method performs geometry only; it never samples or moves physics.
+        ``layout`` overrides the default per-camera (azimuth, elevation) pairs
+        without changing the shared class layout. This method performs geometry
+        only; it never samples or moves physics.
         """
-        if set(camera_settings) != set(self._LAYOUT):
-            expected = ", ".join(self._LAYOUT)
+        layout = self._LAYOUT if layout is None else layout
+        if set(camera_settings) != set(layout):
+            expected = ", ".join(layout)
             raise ValueError(f"automatic VGGT rig requires these cameras: {expected}")
         bounds_min, bounds_max, look_at = (
             np.asarray(value, dtype=np.float64)
@@ -94,7 +99,7 @@ class VggtCameraRig:
             raise ValueError("rig azimuth offset must be finite")
 
         poses: dict[str, CameraPose] = {}
-        for name, (azimuth_deg, elevation_deg) in self._LAYOUT.items():
+        for name, (azimuth_deg, elevation_deg) in layout.items():
             settings = camera_settings[name]
             fovy = float(settings.get("fovy", 62.0))
             width, height = float(settings["width"]), float(settings["height"])

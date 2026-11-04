@@ -25,6 +25,17 @@ from robot.mujoco_simulation.camera_injector import CameraInjector
 from robot.mujoco_simulation.vggt_camera_rig import VggtCameraRig
 
 
+# Side-focus rig chosen by the verification camera sweep: lower elevations and
+# wider side azimuths keep the gripper-object contact in frame for small lifts.
+ROBOCASA_AUTO_RIG_LAYOUT: dict[str, tuple[float, float]] = {
+    "perception_oblique_1": (0.0, 35.0),
+    "perception_oblique_2": (60.0, 25.0),
+    "perception_oblique_3": (-60.0, 25.0),
+    "perception_side_1": (-80.0, 15.0),
+    "perception_side_2": (80.0, 15.0),
+}
+
+
 @dataclass(frozen=True)
 class RoboCasaCameraFrame:
     """One RGB/calibration snapshot; array contents must be treated as read-only.
@@ -61,11 +72,17 @@ class _CameraConfig:
 class RoboCasaCameraManager:
     """Inject fixed/auto cameras and cache configured calibrated camera views."""
 
-    def __init__(self, camera_config: Mapping[str, Mapping[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        camera_config: Mapping[str, Mapping[str, Any]] | None = None,
+        *,
+        rig_layout: Mapping[str, tuple[float, float]] | None = None,
+    ) -> None:
         self._configs = tuple(
             self._parse_config(name, settings)
             for name, settings in (camera_config or {}).items()
         )
+        self._rig_layout = dict(rig_layout or ROBOCASA_AUTO_RIG_LAYOUT)
         self._frames: dict[str, RoboCasaCameraFrame] = {}
         self._rig_region: dict[str, Any] | None = None
 
@@ -128,6 +145,7 @@ class RoboCasaCameraManager:
             bounds_max=np.asarray(region["bounds_max_m"]),
             look_at=np.asarray(region["look_at_m"]),
             azimuth_offset_deg=region["azimuth_offset_deg"],
+            layout=self._rig_layout,
             camera_settings={c.name: {"width": c.width, "height": c.height, "fovy": c.fovy} for c in auto},
         )
         for config in auto:
