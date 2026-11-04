@@ -55,6 +55,14 @@
       "perception_oblique_3",
       "perception_side_1",
       "perception_side_2"
+    ],
+    "verification_camera_names": [
+      "perception_oblique_1",
+      "perception_oblique_2",
+      "perception_oblique_3",
+      "perception_side_1",
+      "perception_side_2",
+      "robot0_eye_in_hand"
     ]
   },
   "motion": {

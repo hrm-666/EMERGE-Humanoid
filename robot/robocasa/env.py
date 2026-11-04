@@ -370,6 +370,7 @@ class RoboCasaEnvManager:
             workspace,
             camera_names=config.get("camera_names", self._camera_manager.names),
             reference_view=config["reference_view"],
+            verification_camera_names=config.get("verification_camera_names"),
         )
 
     def _invalidate_published_observation(self) -> None:

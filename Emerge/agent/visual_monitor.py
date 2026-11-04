@@ -185,7 +185,7 @@ class VisualMonitor:
         if active:
             action = active[1]
             self.track_action(active_id, action["action_type"], action["parameters"])
-        manifest_path = self._observation_store.manifest_path
+        manifest_path = self._observation_store.default_manifest_path
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else None
             if manifest is not None:
@@ -217,7 +217,7 @@ class VisualMonitor:
                             try:
                                 frame = EvidenceFrame.capture(
                                     self.workspace, manifest, trace.next_number,
-                                    all_views=manifest_path == self._observation_store.verification_manifest_path,
+                                    all_views=False,
                                 )
                             except (OSError, ValueError) as exc:
                                 trace.last_seen = None  # Retry if the publisher was replacing an image.

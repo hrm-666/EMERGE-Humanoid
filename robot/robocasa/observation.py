@@ -32,21 +32,32 @@ class RoboCasaObservationWriter:
         *,
         camera_names: Sequence[str],
         reference_view: str,
+        verification_camera_names: Sequence[str] | None = None,
     ) -> None:
         names = tuple(camera_names)
+        verification_names = tuple(verification_camera_names or names)
         if reference_view not in names:
             raise ValueError("observation reference_view must be one of camera_names")
+        if reference_view not in verification_names:
+            raise ValueError(
+                "observation reference_view must be one of verification_camera_names"
+            )
         self.workspace = Path(workspace).expanduser().resolve()
         self.camera_names = names
+        self.verification_camera_names = verification_names
         self.reference_view = reference_view
         self.manifest_path = self.workspace / "artifacts/observations/observation.json"
+        self.verification_manifest_path = (
+            self.workspace / "artifacts/verification_observations/observation.json"
+        )
         self._image_root = self.workspace / "artifacts/cameras/robocasa"
         self._episode_id = uuid4().hex
         self._revision = 0
 
     def invalidate(self) -> None:
-        """Remove the current manifest before resetting or invalidating a scene."""
+        """Remove the current manifests before resetting or invalidating a scene."""
         self.manifest_path.unlink(missing_ok=True)
+        self.verification_manifest_path.unlink(missing_ok=True)
 
     def start_episode(self) -> None:
         """Invalidate the previous scene before reset and assign a fresh identity."""
@@ -54,14 +65,23 @@ class RoboCasaObservationWriter:
         self._episode_id = uuid4().hex
 
     def write(self, frames: Mapping[str, RoboCasaCameraFrame]) -> Path:
-        """Overwrite current images and then publish their calibration manifest."""
-        selected = [frames[name] for name in self.camera_names]
+        """Overwrite current images and then publish their calibration manifests.
+
+        ``manifest_path`` stays the object-localization publication. When a
+        verification-only camera (for example the wrist view) is configured,
+        ``verification_manifest_path`` publishes the wider set preferred by the
+        task-verification sub-agent.
+        """
+        published_names = tuple(dict.fromkeys(
+            self.camera_names + self.verification_camera_names
+        ))
+        selected = [frames[name] for name in published_names]
 
         from PIL import Image
 
         self._revision += 1
         self._image_root.mkdir(parents=True, exist_ok=True)
-        views = []
+        views: dict[str, dict[str, object]] = {}
         for index, frame in enumerate(selected):
             # Stable numeric names also support MuJoCo names containing slashes.
             image_path = self._image_root / f"{index:03d}.png"
@@ -71,15 +91,31 @@ class RoboCasaObservationWriter:
                 os.replace(temporary_image, image_path)
             finally:
                 temporary_image.unlink(missing_ok=True)
-            views.append({
+            views[frame.name] = {
                 "name": frame.name,
                 "image_path": image_path.relative_to(self.workspace).as_posix(),
                 "width": frame.width,
                 "height": frame.height,
                 "intrinsics": frame.intrinsics.tolist(),
                 "T_world_camera": frame.T_world_camera.tolist(),
-            })
-        payload = {
+            }
+        if self.verification_camera_names != self.camera_names:
+            atomic_json(
+                self.verification_manifest_path,
+                self._manifest_payload(views, self.verification_camera_names),
+            )
+        atomic_json(
+            self.manifest_path,
+            self._manifest_payload(views, self.camera_names),
+        )
+        return self.manifest_path
+
+    def _manifest_payload(
+        self,
+        views: Mapping[str, dict[str, object]],
+        camera_names: Sequence[str],
+    ) -> dict[str, object]:
+        return {
             "schema_version": "Emerge.robocasa_observation.v1",
             "revision": self._revision,
             "episode_id": self._episode_id,
@@ -87,7 +123,5 @@ class RoboCasaObservationWriter:
             "coordinate_frame": "world",
             "reference_view": self.reference_view,
             "rgbd": False,
-            "views": views,
+            "views": [views[name] for name in camera_names],
         }
-        atomic_json(self.manifest_path, payload)
-        return self.manifest_path
