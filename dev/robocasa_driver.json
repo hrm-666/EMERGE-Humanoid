@@ -77,9 +77,10 @@
     "publish_every_n_steps": 5
   },
   "vla": {
-    "server_url": "ws://localhost:8000",
-    "resize_size": 224,
-    "replan_steps": 5,
+    "backend": "rldx",
+    "server_url": "tcp://127.0.0.1:5555",
+    "timeout": 120.0,
+    "replan_steps": 8,
     "publish_every_n_steps": 5,
     "stop_on_success": true
   },

@@ -1,4 +1,4 @@
-"""Adapt native RoboCasa episodes and OpenPI execution to EMERGE's driver API."""
+"""Adapt native RoboCasa episodes and VLA execution to EMERGE's driver API."""
 
 from __future__ import annotations
 

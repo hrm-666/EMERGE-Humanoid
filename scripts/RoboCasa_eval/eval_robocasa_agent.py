@@ -81,6 +81,8 @@ def prepare_episode(args: argparse.Namespace, directory: Path) -> Path:
     config.pop("workspace", None)
     config["robocasa"].update(env_name=args.env_name, split=args.split, seed=args.seed)
     config.setdefault("vla", {})["stop_on_success"] = True
+    if getattr(args, "policy_backend", None):
+        config["vla"]["backend"] = args.policy_backend
     if args.policy_server_url:
         config["vla"]["server_url"] = args.policy_server_url
     evaluation = config.setdefault("evaluation", {})
@@ -355,7 +357,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--agent-config", type=Path, default=REPO_ROOT / ".emerge/config.json")
     parser.add_argument("--controller-python", "--watchdog-python", default=os.environ.get("ROBOCASA_PYTHON", sys.executable))
     parser.add_argument("--agent-python", default=sys.executable)
-    parser.add_argument("--policy-server-url", help="Override the driver's OpenPI service URL")
+    parser.add_argument("--policy-backend", choices=("openpi", "rldx"), help="Override the driver's VLA backend")
+    parser.add_argument("--policy-server-url", help="Override the policy endpoint: ws://host:port for OpenPI, tcp://host:port for RLDX")
     parser.add_argument("--record-video", action=argparse.BooleanOptionalAction, default=True,
                         help="Save rollout.mp4 from the native left camera (enabled by default)")
     parser.add_argument("--max-steps", type=positive_int, help="Override native registry horizon; all control actions share it")

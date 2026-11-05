@@ -1,8 +1,9 @@
-"""Execute OpenPI action12 chunks against the RoboCasa environment adapters.
+"""Execute OpenPI or RLDX action12 chunks against RoboCasa environment adapters.
 
 Policy inputs follow local openpi/examples/robocasa/main.py: three native RGB
 images, resize-with-pad, unchanged XYZW quaternions and a 16-D state. Perception
-camera artifacts are independent of these inputs. OpenPI is imported lazily.
+camera artifacts are independent of these inputs. RLDX uses native per-step
+observations through its bridge. Both clients are imported lazily.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 import numpy as np
 
@@ -71,6 +73,9 @@ class RoboCasaPolicyExecutor:
     ) -> None:
         self._environment = environment
         self.config = dict(config or {})
+        self.backend = self.config.get("backend", "openpi")
+        if self.backend not in {"openpi", "rldx"}:
+            raise ValueError(f"Unsupported RoboCasa VLA backend: {self.backend!r}")
         self.resize_size = int(self.config.get("resize_size", 224))
         self.replan_steps = max(1, int(self.config.get("replan_steps", 5)))
         self.publish_every_n_steps = max(1, int(self.config.get("publish_every_n_steps", self.replan_steps)))
@@ -78,6 +83,8 @@ class RoboCasaPolicyExecutor:
         self._client = client
         self._owns_client = client is None
         self._closed = False
+        self._rldx_context: tuple[int, str] | None = None
+        self._rldx_observed_step: int | None = None
 
     def execute(
         self,
@@ -148,7 +155,7 @@ class RoboCasaPolicyExecutor:
         health_checked = False
         while True:
             progress.stage = "preprocess"
-            element = self._build_element(instruction)
+            element = self._build_element(instruction) if self.backend == "openpi" else None
             progress.stage = "health_check"
             client = self._get_client()
             if not health_checked:
@@ -166,11 +173,33 @@ class RoboCasaPolicyExecutor:
             cancellation = cancel_check() if cancel_check else None
             if cancellation:
                 return False, "interrupted", cancellation
+            if self.backend == "rldx":
+                progress.stage = "preprocess"
+                context = (self._environment.episode_id, instruction)
+                if (
+                    context != self._rldx_context
+                    or self._rldx_observed_step != self._environment.action_steps
+                ):
+                    # A reset, new instruction or intervening geometric action
+                    # starts a fresh history; contiguous same-task calls keep it.
+                    client.start_episode(instruction, self._environment.latest_obs)
+                    self._rldx_context = context
+                    self._rldx_observed_step = self._environment.action_steps
             progress.stage = "inference"
             inference_started = time.perf_counter()
             progress.inference_count += 1
             try:
-                result = client.infer(element)
+                result = client.infer() if self.backend == "rldx" else client.infer(element)
+            except Exception:
+                if self.backend == "rldx":
+                    self._rldx_context = None
+                    if self._owns_client:
+                        self._client = None
+                        try:
+                            client.close()
+                        except Exception:
+                            logger.warning("Could not close failed RLDX client", exc_info=True)
+                raise
             finally:
                 progress.inference_seconds += time.perf_counter() - inference_started
             progress.stage = "action_validation"
@@ -194,6 +223,10 @@ class RoboCasaPolicyExecutor:
                         progress.steps += delta
                         progress.last_gripper = float(action[6])
                         progress.dirty = True
+                if self.backend == "rldx":
+                    progress.stage = "observation_history"
+                    client.observe(self._environment.latest_obs)
+                    self._rldx_observed_step = self._environment.action_steps
                 progress.stage = "environment_state"
                 stopped = self._stop_status(terminated, truncated)
                 if stopped is not None:
@@ -248,17 +281,25 @@ class RoboCasaPolicyExecutor:
     def _action_chunk(result: Any) -> np.ndarray:
         chunk = np.asarray(result["actions"])
         if chunk.ndim != 2 or not len(chunk) or chunk.shape[1] != 12:
-            raise ValueError(f"OpenPI actions must have non-empty shape (N, 12), got {chunk.shape}")
+            raise ValueError(f"Policy actions must have non-empty shape (N, 12), got {chunk.shape}")
         return chunk
 
     def _get_client(self) -> Any:
         if self._client is None:
-            from robot.vla.openpi_bridge import Pi05Client
+            timeout = float(self.config.get("timeout", 120.0))
+            if self.backend == "rldx":
+                from robot.vla.rldx_bridge import RLDXClient
 
-            self._client = Pi05Client(
-                self.config.get("server_url", "ws://localhost:8000"),
-                timeout=float(self.config.get("timeout", 120.0)),
-            )
+                endpoint = urlsplit(self.config.get("server_url", "tcp://127.0.0.1:5555"))
+                if endpoint.scheme != "tcp" or not endpoint.hostname or endpoint.port is None:
+                    raise ValueError("RLDX server_url must be tcp://host:port")
+                self._client = RLDXClient(host=endpoint.hostname, port=endpoint.port, timeout=timeout)
+            else:
+                from robot.vla.openpi_bridge import Pi05Client
+
+                self._client = Pi05Client(
+                    self.config.get("server_url", "ws://localhost:8000"), timeout=timeout,
+                )
         return self._client
 
     def close(self) -> None:

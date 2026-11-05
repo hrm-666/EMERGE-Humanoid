@@ -9,7 +9,10 @@ import os
 from pathlib import Path
 import sys
 from typing import Any
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10 controller environments.
+    import tomli as tomllib
 
 
 _PLUGIN_HOME_ENV = "Emerge_PLUGIN_HOME"

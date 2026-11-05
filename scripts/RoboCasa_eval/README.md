@@ -2,6 +2,8 @@
 
 入口为 `eval_robocasa_agent.py`。它沿用 LIBERO 的进程组织：Controller 持有仿真环境，现有 `Emerge.cli.headless` 持有主 agent、两个子代理与视觉监控，二者通过本次任务独立的 workspace 交换动作和观测。
 
+`dev/robocasa_driver.json` 当前默认选择 RLDX。下面的 OpenPI 示例通过 `--policy-backend openpi` 显式选择后端。RLDX 的启动方法见本页末尾。
+
 ## 运行准备
 
 - RoboCasa Python 环境能创建原生 PandaOmron 任务，并能导入本仓库的 Controller。
@@ -31,6 +33,7 @@ python -B scripts/RoboCasa_eval/eval_robocasa_agent.py \
   --agent-python "$CONDA_PREFIX/bin/python" \
   --agent-config .emerge/config.json \
   --driver-config dev/robocasa_driver.json \
+  --policy-backend openpi \
   --policy-server-url ws://127.0.0.1:8000 \
   --output-dir tests/robocasa_validation/runs/agent_episode_mug_01
 ```
@@ -115,3 +118,48 @@ CLI 返回码：0 表示评测正常结束（包括任务失败），1 表示执
 入口仍只负责一个 episode，批量调度和断点续跑尚未实现。
 
 评测器直接复用 LIBERO 的进程清理、agent 结果校验、继续反馈判定和动作统计。环境已给出成功或步数耗尽等终态后，收尾耗时不改变该回合判定。90秒退出宽限覆盖现有视觉监控的最终验证与记忆保存，不修改通用 agent、视觉监控或记忆逻辑。
+
+
+## RLDX 接入
+
+当前默认配置选择 `backend=rldx`，地址为 `tcp://127.0.0.1:5555`，每次推理执行前 8 步。
+原生客户端和模型使用已有 RPent Python 环境，规划 agent 继续使用 EmergePolicy Python，不需要合并两套依赖。
+
+先在仓库根目录启动模型服务（GPU 3 是本次验证选用的空闲卡，使用时按占用情况调整）：
+
+```bash
+CUDA_VISIBLE_DEVICES=3 HF_HUB_OFFLINE=1 \
+  /root/rpent-venv/.venv-robocasa/bin/python -u \
+  -m external_model_server.rldx_server \
+  --model-path /private/rpent/checkpoints/rldx-1-ft-rc365 --port 5555
+```
+
+看到 `Server is ready and listening on tcp://127.0.0.1:5555` 后，在另一个终端设置仿真环境：
+
+```bash
+export MUJOCO_GL=egl
+export PYOPENGL_PLATFORM=egl
+export MUJOCO_EGL_DEVICE_ID=0
+export ROBOCASA_ASSETS_PATH=/private/rpent/.robocasa/assets
+export NO_ALBUMENTATIONS_UPDATE=1
+```
+
+本机已通过 `ACTION.md → Controller → Driver → Executor → RLDX → env.step` 完成短闭环验证：连续执行两次，再重新加载同一任务执行一次，共执行 24 步。
+验证结果及日志保存在本机的 `artifacts/rldx_smoke_20261105/`：187 项测试通过，真实 OpenCabinet/seed7 的三次请求各执行 8 步，尚未完成开柜任务。该目录属于本地实验产物，不随 Git 提交。
+
+正式 agent 实验还需要原有 VGGT / SAM3 服务。保留上述仿真环境变量，从仓库根目录执行：
+
+```bash
+/opt/conda/envs/EmergePolicy/bin/python scripts/RoboCasa_eval/eval_robocasa_agent.py \
+  --env-name OpenCabinet --split target --seed 7 \
+  --controller-python /root/rpent-venv/.venv-robocasa/bin/python \
+  --agent-python /opt/conda/envs/EmergePolicy/bin/python \
+  --agent-config .emerge/config.json \
+  --driver-config dev/robocasa_driver.json \
+  --policy-backend rldx --policy-server-url tcp://127.0.0.1:5555 \
+  --output-dir /tmp/emerge_rldx_agent_new
+```
+
+服务入口复用 RLDX 原生 Policy、仿真 wrapper 和 ZeroMQ server。它固定 backbone 支持文件版本，并补齐本机旧 checkpoint 为 null 的 `image_max_area`，恢复为处理器默认值 65536。
+执行器在环境 reset、指令改变、插入几何动作导致观测历史中断时重新初始化 RLDX；连续同任务请求保留历史和记忆。请求失败后丢弃自有客户端，下次新建连接，不自动重放仿真动作。
+切换回 OpenPI 时同时设置 `backend=openpi` 和对应的 `ws://host:port`。没有 backend 字段的旧配置仍默认 OpenPI。

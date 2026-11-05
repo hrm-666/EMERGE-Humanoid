@@ -54,6 +54,7 @@ class RoboCasaEnvManager:
         self._convert_action: Callable[[np.ndarray], dict[str, Any]] | None = None
         self._ready = False
         self._action_steps = 0
+        self._episode_id = 0
         self._clear_observation()
 
     @property
@@ -73,6 +74,11 @@ class RoboCasaEnvManager:
         episode's count after close().
         """
         return self._action_steps
+
+    @property
+    def episode_id(self) -> int:
+        """Monotonic reset generation for stateful policy clients."""
+        return self._episode_id
 
     @property
     def last_gripper_close(self) -> bool | None:
@@ -139,6 +145,7 @@ class RoboCasaEnvManager:
         else:
             obs, info = environment.reset(seed=int(seed))
         self._store_result(obs, 0.0, False, False, info)
+        self._episode_id += 1
         try:
             # A reset may select another kitchen. Plan once for its fixtures,
             # then retain those world-fixed perception views for this episode.
