@@ -8,7 +8,7 @@
 
 - RoboCasa Python 环境能创建原生 PandaOmron 任务，并能导入本仓库的 Controller。
 - EmergePolicy 环境能运行 EMERGE 主程序。
-- 已有可供 RoboCasa 使用的 OpenPI 服务，以及 VGGT、SAM3 服务。复用之前已跑通的 **RoboCasa checkpoint**；LIBERO checkpoint 不能作为这里的替代品。默认服务端口为 8000、8001、8002。
+- 已有可供 RoboCasa 使用的 OpenPI 服务和 SAM3 服务。复用之前已跑通的 **RoboCasa checkpoint**；LIBERO checkpoint 不能作为这里的替代品。默认端口为 OpenPI 8000、SAM3 8002；使用 RGB-only 定位配置时还需 VGGT 8001。
 - 正式 API 配置仍使用仓库 `.emerge/config.json`。启动器只传递路径，不修改它，也不把凭据复制到任务目录。
 
 从仓库根目录运行：
@@ -43,6 +43,8 @@ python -B scripts/RoboCasa_eval/eval_robocasa_agent.py \
 `--controller-python` 与 `--agent-python` 可以不同。前者也可通过 `ROBOCASA_PYTHON` 环境变量指定；未指定时两者均使用启动器自身的 Python。无需给两个环境安装相互冲突的仿真依赖。
 
 ## 执行流程
+
+默认定位使用 SAM3 和 3 个 `perception_baseline_*` 的 RGB＋仿真深度，`geometry_backend: auto` 自动选择 RGB-D；核验沿用原有 5 个观察视角加腕部 RGB，参考视角优先沿用定位参考，否则取列表首项。VLA 仍读取原生左、右、腕部图像，总计 11 个相机。此配置不使用真值分割，也不调用 VGGT。
 
 1. 创建本次任务的 workspace、初始文档和独立 driver 配置，由 Controller 加载配置。
 2. 用 RoboCasa Python 启动 `robot.controller --driver robocasa`，安装 profile 并创建原生环境。模型服务连接由已有执行器和子代理处理。

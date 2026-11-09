@@ -1,16 +1,7 @@
-"""Optional RoboCasa cameras and calibrated RGB snapshots, without file I/O.
+"""Configured RoboCasa RGB(-D) cameras, without physics steps or file I/O.
 
-Camera names are MuJoCo model names, without the Gym ``video.`` prefix.
-``existing`` cameras may specify width/height; omitted dimensions use the
-native image size when available, otherwise 256. ``fixed`` cameras require
-world-frame ``pos`` (metres) and ``quat`` (WXYZ), with optional ``fovy`` in
-degrees (default 62). ``auto`` injects LIBERO's five perception camera names
-and uses the shared VGGT rig around legal initial item placement regions after
-every reset, falling back to task fixtures when no item regions are available.
-
-Native images are already upright. Direct MuJoCo renders are flipped once to
-match them. Calibration uses optical camera axes: +X right, +Y down, +Z forward.
-This module does not import RoboCasa/robosuite, step physics, or write artifacts.
+Native RGB is upright; direct renders are flipped once. Calibration uses
+optical axes (+X right, +Y down, +Z forward), with depth in metres along +Z.
 """
 
 from __future__ import annotations
@@ -25,29 +16,28 @@ from robot.mujoco_simulation.camera_injector import CameraInjector
 from robot.mujoco_simulation.vggt_camera_rig import VggtCameraRig
 
 
-# Side-focus rig chosen by the verification camera sweep: lower elevations and
-# wider side azimuths keep the gripper-object contact in frame for small lifts.
+# Named (azimuth, elevation) angles; legacy names retain their original poses.
 ROBOCASA_AUTO_RIG_LAYOUT: dict[str, tuple[float, float]] = {
     "perception_oblique_1": (0.0, 35.0),
     "perception_oblique_2": (60.0, 25.0),
     "perception_oblique_3": (-60.0, 25.0),
     "perception_side_1": (-80.0, 15.0),
     "perception_side_2": (80.0, 15.0),
+    "perception_baseline_1": (0.0, 46.0),
+    "perception_baseline_2": (48.0, 40.0),
+    "perception_baseline_3": (-48.0, 40.0),
 }
 
 
 @dataclass(frozen=True)
 class RoboCasaCameraFrame:
-    """One RGB/calibration snapshot; array contents must be treated as read-only.
-
-    ``T_world_camera`` maps optical camera coordinates into simulation world
-    coordinates. The arrays are owned by this snapshot, not by native Gym obs.
-    """
+    """Owned, read-only RGB/calibration and optional aligned metric depth."""
 
     name: str
     rgb: np.ndarray
     intrinsics: np.ndarray
     T_world_camera: np.ndarray
+    depth_m: np.ndarray | None = None
 
     @property
     def width(self) -> int:
@@ -67,6 +57,7 @@ class _CameraConfig:
     pos: tuple[float, ...] | None = None
     quat: tuple[float, ...] | None = None
     fovy: float | None = None
+    depth: bool = False
 
 
 class RoboCasaCameraManager:
@@ -82,7 +73,8 @@ class RoboCasaCameraManager:
             self._parse_config(name, settings)
             for name, settings in (camera_config or {}).items()
         )
-        self._rig_layout = dict(rig_layout or ROBOCASA_AUTO_RIG_LAYOUT)
+        layout = ROBOCASA_AUTO_RIG_LAYOUT if rig_layout is None else rig_layout
+        self._rig_layout = {c.name: layout[c.name] for c in self._configs if c.mode == "auto"}
         self._frames: dict[str, RoboCasaCameraFrame] = {}
         self._rig_region: dict[str, Any] | None = None
 
@@ -292,7 +284,7 @@ class RoboCasaCameraManager:
             "bounds_max_m": maximum.tolist(),
             "look_at_m": ((minimum+maximum)/2).tolist(),
             # Fixture fronts point along local -Y. Rotate the original +X rig
-            # to that accessible side; preserve all five relative angles.
+            # to that accessible side; preserve the configured relative angles.
             "azimuth_offset_deg": float(np.rad2deg(anchor.rot)-90.0),
         }
 
@@ -305,12 +297,18 @@ class RoboCasaCameraManager:
             native = native_obs.get(f"video.{config.name}")
             width = config.width or (native.shape[1] if native is not None else 256)
             height = config.height or (native.shape[0] if native is not None else 256)
-            if native is not None and native.shape[:2] == (height, width):
+            depth = None
+            if not config.depth and native is not None and native.shape[:2] == (height, width):
                 rgb = native.copy(order="C")
             else:
                 rendered = sim.render(
-                    camera_name=config.name, width=width, height=height, depth=False
+                    camera_name=config.name, width=width, height=height, depth=config.depth
                 )
+                if config.depth:
+                    from robosuite.utils.camera_utils import get_real_depth_map
+
+                    rendered, depth_buffer = rendered
+                    depth = get_real_depth_map(sim, depth_buffer[::-1]).astype(np.float32)
                 rgb = rendered[::-1].copy(order="C")
             fovy = float(sim.model.cam_fovy[camera_id])
             focal = 0.5 * height / np.tan(np.deg2rad(fovy) / 2.0)
@@ -322,9 +320,12 @@ class RoboCasaCameraManager:
                 [1.0, -1.0, -1.0]
             )
             transform[:3, 3] = sim.data.cam_xpos[camera_id]
-            for array in (rgb, intrinsics, transform):
+            arrays = [rgb, intrinsics, transform]
+            if depth is not None:
+                arrays.append(depth)
+            for array in arrays:
                 array.setflags(write=False)
-            frames[config.name] = RoboCasaCameraFrame(config.name, rgb, intrinsics, transform)
+            frames[config.name] = RoboCasaCameraFrame(config.name, rgb, intrinsics, transform, depth)
         self._frames = frames
         return self.frames
 
@@ -337,16 +338,15 @@ class RoboCasaCameraManager:
         self.clear()
         self._rig_region = None
 
-
-
     @staticmethod
     def _parse_config(name: str, settings: Mapping[str, Any]) -> _CameraConfig:
         mode = settings.get("mode", "existing")
         if mode not in {"existing", "fixed", "auto"}:
             raise ValueError(f"camera {name!r} mode must be existing, fixed or auto")
         width, height = settings.get("width"), settings.get("height")
+        depth = bool(settings.get("depth", False))
         if mode == "existing":
-            return _CameraConfig(name, mode, width, height)
+            return _CameraConfig(name, mode, width, height, depth=depth)
         pos = quat = None
         if mode == "fixed":
             from robot.mujoco_simulation.pose_utils import PoseUtils
@@ -358,4 +358,4 @@ class RoboCasaCameraManager:
                 raise ValueError("camera quaternion must be nonzero")
             quat = tuple(quaternion / norm)
         fovy = float(settings.get("fovy", 62.0))
-        return _CameraConfig(name, mode, width, height, pos, quat, fovy)
+        return _CameraConfig(name, mode, width, height, pos, quat, fovy, depth)
