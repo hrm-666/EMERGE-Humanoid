@@ -93,6 +93,7 @@
   },
   "evaluation": {
     "enabled": true,
+    "max_action_steps": 2400,
     "status_path": "artifacts/evaluation/status.json"
   }
 }

@@ -361,10 +361,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--policy-server-url", help="Override the policy endpoint: ws://host:port for OpenPI, tcp://host:port for RLDX")
     parser.add_argument("--record-video", action=argparse.BooleanOptionalAction, default=True,
                         help="Save rollout.mp4 from the native left camera (enabled by default)")
-    parser.add_argument("--max-steps", type=positive_int, help="Override native registry horizon; all control actions share it")
+    parser.add_argument("--max-steps", type=positive_int, help="Override the driver or native registry episode budget; all control actions share it")
     parser.add_argument("--max-agent-iterations", type=positive_int, help="Override iterations per headless run")
     parser.add_argument("--max-agent-feedback-rounds", type=nonnegative_int, default=2)
-    parser.add_argument("--episode-timeout-s", type=positive_float, default=1800., help="Execution timeout after readiness, shared by continuations")
+    parser.add_argument("--episode-timeout-s", type=positive_float, default=2000., help="Execution timeout after readiness, shared by continuations (default: 2000 seconds)")
     parser.add_argument("--ready-timeout-s", type=positive_float, default=300.)
     parser.add_argument("--poll-interval-s", type=positive_float, default=.25)
     parser.add_argument("--shutdown-grace-s", type=positive_float, default=90.)

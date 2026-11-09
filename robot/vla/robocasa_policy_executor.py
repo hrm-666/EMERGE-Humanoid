@@ -35,6 +35,7 @@ class RoboCasaVLAResult:
     error_stage: str | None = None
     observation_error: str | None = None
     last_gripper_command: float | None = None
+    rldx_history_reset: dict[str, Any] | None = None
 
 
 @dataclass
@@ -45,6 +46,7 @@ class _Progress:
     last_gripper: float | None = None
     inference_count: int = 0
     inference_seconds: float = 0.0
+    history_reset: dict[str, Any] | None = None
 
 
 class RoboCasaPolicyExecutor:
@@ -134,6 +136,7 @@ class RoboCasaPolicyExecutor:
             total_steps=progress.steps, reason=reason, error_message=error_message,
             error_stage=error_stage, observation_error=observation_error,
             last_gripper_command=progress.last_gripper,
+            rldx_history_reset=progress.history_reset,
         )
 
     def _run(
@@ -182,9 +185,22 @@ class RoboCasaPolicyExecutor:
                 ):
                     # A reset, new instruction or intervening geometric action
                     # starts a fresh history; contiguous same-task calls keep it.
+                    if self._rldx_context is None:
+                        reset_reason = "first_use" if self._rldx_observed_step is None else "inference_error"
+                    elif self._rldx_context[0] != context[0]:
+                        reset_reason = "environment_reset"
+                    elif self._rldx_context[1] != instruction:
+                        reset_reason = "instruction_changed"
+                    else:
+                        reset_reason = "unobserved_steps"
                     client.start_episode(instruction, self._environment.latest_obs)
                     self._rldx_context = context
                     self._rldx_observed_step = self._environment.action_steps
+                    progress.history_reset = {
+                        "reason": reset_reason,
+                        "episode_id": context[0],
+                        "action_steps": self._environment.action_steps,
+                    }
             progress.stage = "inference"
             inference_started = time.perf_counter()
             progress.inference_count += 1

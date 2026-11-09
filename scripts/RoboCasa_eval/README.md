@@ -53,7 +53,9 @@ python -B scripts/RoboCasa_eval/eval_robocasa_agent.py \
 5. 监督环境状态。主 agent 正常提前返回、任务仍未完成时，最多进行两轮同 session 的继续反馈。每轮使用独立 run_id，共享最初的执行截止时间。
 6. 成功、预算耗尽、超时、异常或收到中断后，先停止主 agent，让它通过仍在运行的 Controller 取消未完成动作，再清理 Controller，关闭视频编码器，最后保存结果。
 
-RoboCasa 保留 `gym.make(seed=...)` 及既有 reset 流程，不引入 LIBERO 的 BDDL、初始状态数组或额外 settling 动作。没有 `--max-steps` 或 driver 配置覆盖时，动作预算由原生任务 registry 解析。VLA 与几何动作共享这个预算。
+RoboCasa 保留 `gym.make(seed=...)` 及既有 reset 流程，不引入 LIBERO 的 BDDL、初始状态数组或额外 settling 动作。默认 driver 配置将整局动作预算设为 **2400 步**，就绪后的执行超时为 **2000 秒（33 分 20 秒）**。预算参考本地 RPent `pilot_none` 原子任务成功案例：最大动作消耗约 2319 步（由逐步录制帧数加未录制的机械臂校准步数重建），最长耗时 1975.4 秒。
+
+VLA、几何动作及其保持步数共享整局动作预算；续跑共享最初的执行截止时间。官方成功、步数耗尽或超时都会结束评测。`--max-steps` 优先于 driver 配置；自定义 driver 未配置 `evaluation.max_action_steps` 且未传 `--max-steps` 时，仍由原生任务 registry 解析预算。这组放宽后的预算应与原生 horizon 下的历史成绩分开比较。
 
 ## 重要参数
 
@@ -62,11 +64,11 @@ RoboCasa 保留 `gym.make(seed=...)` 及既有 reset 流程，不引入 LIBERO �
 | `--env-name` | 必填，原生 RoboCasa 任务类名 |
 | `--split` / `--seed` | 默认 `target` / `7` |
 | `--record-video` / `--no-record-video` | 默认录制 `rollout.mp4`；诊断时可以显式关闭 |
-| `--max-steps` | 覆盖整个 episode 的控制步数预算 |
+| `--max-steps` | 覆盖整个 episode 的控制步数预算；默认 driver 配置为 2400 步 |
 | `--max-agent-iterations` | 覆盖每轮主 agent 的工具迭代上限；默认使用 API 配置中的值 |
 | `--max-agent-feedback-rounds` | 主 agent 正常返回但任务未完成时的继续反馈次数，默认 2 |
 | `--ready-timeout-s` | 环境初始化超时，默认 300 秒 |
-| `--episode-timeout-s` | 就绪后的执行超时，默认 1800 秒，续跑不会重置 |
+| `--episode-timeout-s` | 就绪后的执行超时，默认 2000 秒，续跑不会重置 |
 | `--shutdown-grace-s` | 子进程收到中断后的退出宽限，默认 90 秒，覆盖动作取消与视觉记忆收尾 |
 
 ## 输出与判定
@@ -104,6 +106,8 @@ python scripts/RoboCasa_eval/summarize_action_metrics.py <结果根目录> [--cs
 ```
 
 输出按动作类型统计的 count / completed / failed / error、位置误差 median/p90/max、旋转误差 p90，以及 `approached` 残差分布。
+
+RLDX 的历史重建行为保持不变：新 episode、指令改变或中间执行过未纳入 VLA 历史的动作时，用当前观测重建视频历史；连续同任务调用保留历史。VLA 执行结果及对应的 `action_metrics.jsonl` 记录通过 `rldx_history_reset` 字段报告本次重建的原因、episode 和动作步数，driver 补充上一动作类型；本次未重建时该字段为 `null`。推理异常后重建标为 `inference_error`。`ROBOT_STATE.md` 的 `robots.robocasa.rldx_last_history_reset` 保留最近一次摘要；不另写事件文件或累计计数。
 
 与 LIBERO 一样，结果中的 `termination_reason` 以 `infrastructure_error:` 前缀标记环境、服务或进程错误；`success` 表示环境成功，`max_action_steps`、`episode_timeout` 等表示任务未完成，`interrupted` 表示用户中断。初始化 NaN 等错误仍与策略失败分开判定。`controller.log` 和 `agent.log` 完整保留，启动器的异常诊断附加到 `agent.log`。每轮 headless 的 `agent_runs/<run_id>/result.json` 继续使用通用运行时原有格式。
 

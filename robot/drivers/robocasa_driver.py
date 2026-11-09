@@ -74,6 +74,7 @@ class RoboCasaDriver(BaseDriver):
             self._environment = RoboCasaEvalEnvManager(**common, **eval_config)
         else:
             self._environment = RoboCasaEnvManager(**common)
+        self._last_history_reset: dict[str, Any] | None = None
         self._vla = RoboCasaPolicyExecutor(self._environment, config=vla)
         self._actions = RoboCasaActionController(
             self._environment, config=dict(motion or {}), vla_executor=self._vla
@@ -90,6 +91,7 @@ class RoboCasaDriver(BaseDriver):
         if self._closed:
             raise RuntimeError("RoboCasa driver is closed")
         self._last_execution = None
+        self._last_history_reset = None
         self._load_error = None
         try:
             self._environment.create()
@@ -104,6 +106,7 @@ class RoboCasaDriver(BaseDriver):
         *,
         cancel_check: CancelCheck | None = None,
     ) -> str:
+        previous_action_type = (self._last_execution or {}).get("action_type")
         self._last_execution = None
         if self._closed:
             return "Failed: RoboCasa driver is closed"
@@ -117,6 +120,9 @@ class RoboCasaDriver(BaseDriver):
             )
             return f"Failed: {type(exc).__name__}: {exc}"
         self._last_execution = {"action_type": action_type, **asdict(result)}
+        if reset := self._last_execution.get("rldx_history_reset"):
+            reset["previous_action_type"] = previous_action_type
+            self._last_history_reset = deepcopy(reset)
         self._record_action_metrics(action_type, params)
         label = "VLA execution" if action_type == "vla_execute" else action_type
         summary = (
@@ -200,6 +206,8 @@ class RoboCasaDriver(BaseDriver):
         if self._load_error is not None:
             state["setup_error"] = self._load_error
         state["last_execution"] = deepcopy(self._last_execution)
+        if self._vla.backend == "rldx":
+            state["rldx_last_history_reset"] = deepcopy(self._last_history_reset)
         manifest = environment.observation_manifest_path
         state["observation_manifest_path"] = str(manifest) if manifest is not None else None
         return {"robots": {"robocasa": state}}

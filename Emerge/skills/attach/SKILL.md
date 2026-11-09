@@ -75,10 +75,10 @@ A completed VLA phase is not by itself a reason to open the gripper. Release acc
 
 Being near, above, or within the broad footprint of a containment target is not sufficient. If placement remains ambiguous, continue the fine VLA phase or reassess from a safer view instead of opening the gripper. Do not use an independent close as a substitute for visually guided grasp alignment when finger placement is uncertain.
 
-After VLA, re-read the environment. If the intended open or close is only
-partial, use the matching `set_gripper` command for 5 steps. For close, first
-confirm the object is between the fingers and allow its width to keep `qpos`
-above zero; otherwise return to VLA. Do not add a separate lift test.
+While grasp or contact is still being adjusted, continue VLA. Do not infer
+an incomplete close from a nonzero finger opening, or add a fixed gripper
+correction merely because a VLA chunk ended. Use `set_gripper` only for a
+clear independent opening, closing, or release need. Do not add a separate lift test.
 
 ## Pose and Orientation
 
@@ -147,7 +147,7 @@ If an object is dropped, tipped, or released outside its target, re-anchor for a
 - Use attach to support VLA, not to replace fine visual manipulation.
 - Preserve wrist orientation unless there is a clear geometric reason to change it.
 - Stop at a useful pre-manipulation region rather than forcing a final contact pose.
-- Confirm the intended object is visibly secured and settle a partial close before transport without requiring zero finger opening.
+- Confirm the intended object is visibly secured before transport without requiring zero finger opening.
 - Set a moderate explicit step budget and change the motion plan after non-convergence.
 - Prefer vertical-horizontal-vertical transport when carrying through clutter.
 - Release on an open surface only when landing is controlled; release into a containment target only after the object is visibly inside and past the relevant rim.
