@@ -21,9 +21,15 @@ def _pose_utils():
 
 
 def _load_json_block(path: Path) -> dict[str, Any]:
-    if not path.exists():
+    # Read directly and treat a missing file as an empty document. Checking
+    # path.exists() first leaves a TOCTOU window: a concurrent atomic replace
+    # (save_robot_state_doc writes a temp file then os.replace) can make the
+    # path briefly unavailable on network filesystems such as the EPC mount,
+    # raising FileNotFoundError between the check and the read.
+    try:
+        content = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return {}
-    content = path.read_text(encoding="utf-8")
     match = _BLOCK_RE.search(content)
     if not match:
         return {}
