@@ -45,9 +45,9 @@ and current scene:
 - Counters, dining tables, and containers: identify the final supporting surface
   or the interior of a basket, tray, bowl, cup, pot, or other container.
 
-Before approaching these structures or carrying an object beside, above, or
-through them, call `object_location` to measure the relevant objects and
-structures' `position_m` and `size_m`. Plan around their full spatial extent,
+Before carrying an object beside, above, or through these structures,
+call `object_location` to measure the relevant objects and structures'
+`position_m` and `size_m`. Plan around their full spatial extent,
 leaving clearance for the gripper and held object. A structure's overall bounding
 box does not establish its usable interior space.
 

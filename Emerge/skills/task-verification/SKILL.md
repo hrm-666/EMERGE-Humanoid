@@ -19,12 +19,6 @@ the target is already exposed, skip the articulated action and localize the
 movable target. Do not add this check when current scene state cannot change the
 next action or an embodiment profile forbids `task_verification`.
 
-## Visual Monitor Completion
-
-The visual monitor uses the same multi-camera verification capability while an action is running. If `execute_robot_action` reports that the visual monitor interrupted the action because the current subgoal is achieved, that report is already the required visual verification.
-
-In that case, do **not** call `delegate_subagent` with `agent_name="task_verification"` for the same subgoal. Directly mark the subgoal done in `PLAN.md`, advance to the next focus, and continue execution. Calling the verification subagent again would duplicate a completed judgment.
-
 ## Form the Verification
 
 State the exact visible conditions that define success. Phrase every requested

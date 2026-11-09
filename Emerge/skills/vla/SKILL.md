@@ -10,42 +10,19 @@ Use `vla_execute` for fine manipulation that benefits from continuous visual cor
 
 ## Before Execution
 
-Identify the current manipulation target and intended local change. Treat the
-complete task only as context unless the active embodiment requires its fixed
-episode instruction for every VLA call.
+Identify the current manipulation target and intended local change.
 Preserve already acceptable task relations when continuing a multi-object task.
 
 Use VLA when the target is visible and the next phase involves adaptive alignment or contact. If the end-effector is far from an ordinary object and no pose-sensitive interaction is required, use attach for the coarse approach first.
 
-### Phase-Local Instructions
+### Task Instruction
 
-Every `vla_execute` instruction normally describes exactly the next unfinished
-visual-contact phase, even when the current PLAN subgoal combines grasp,
-transport, and placement. The active embodiment profile is authoritative:
-when it declares a fixed episode instruction, copy the runtime
-`effective_prompt` exactly for every VLA call and keep the current phase in the
-plan and reasoning instead. Never rewrite a fixed checkpoint instruction.
+Follow the active embodiment profile's instruction contract.
+When it requires the original episode instruction, copy that instruction
+verbatim into every `vla_execute` call. Do not shorten it or replace it with
+a newly written phase instruction.
 
-When the embodiment accepts phase-local prompts, never copy the Mission,
-mention a later object, or combine grasp and final placement in one instruction.
-
-Keep it to one short imperative sentence: include only the current action,
-active object, and destination when needed. Omit reasoning, observations,
-coordinates, progress history, and later steps.
-
-- Grasp phase: `grasp the second moka pot`.
-- Placement phase: `place the held second moka pot on the stove`.
-
-A single continuous articulated phase may include its visual approach, contact,
-and actuation, such as `open the top drawer`, but it must not absorb a later
-object-manipulation phase.
-
-For a later object in a multi-object task, omit every already completed movable
-object from the VLA instruction. During grasping, name only the active movable
-object and the local grasp intent. During placement, name only the held active
-object, its current destination, and the release intent. Do not restate the
-complete task to remind VLA of prior progress: each VLA call starts from the
-current observation and may otherwise restart with the first named object.
+Keep the current execution phase in `PLAN.md` and action reasoning.
 
 ## Step Budget
 
@@ -79,27 +56,30 @@ safe useful action remains.
 
 ## Multi-Object and Long-Horizon Instructions
 
-A full task may naturally require several VLA chunks, but each chunk remains
-bound to the current PLAN subgoal. Returning at a budget boundary can occur in
-the middle of one grasp or one final placement; it is not permission for one
-VLA instruction to absorb later transport or next-object subgoals.
+A full task may naturally require several VLA chunks. Track the current subgoal
+and progress in `PLAN.md`; the instruction contract above still applies to
+every call.
 
 When the current object is completed, explicitly shift attention to the next target before continuing. Prefer an approach that avoids revisiting or colliding with objects already placed acceptably. If the VLA begins manipulating a completed object or a destination container instead of the intended movable object, stop and re-anchor rather than allowing a longer rollout to reinforce the mistake.
 
 ## Example
 
+For an episode whose original instruction is "Pick the mug from the counter and
+place it under the coffee machine dispenser.", keep that sentence even when the
+current focus is grasping:
+
 ```python
 execute_robot_action(
     action_type="vla_execute",
     parameters={
-        "instruction": "pick up the red block",
-        "step": 10
+        "instruction": "Pick the mug from the counter and place it under the coffee machine dispenser.",
+        "step": 40
     },
     reasoning=(
-        "The end effector is near the visible red block, and the grasp requires "
+        "The current phase is grasping the mug near the end effector and requires "
         "fine visual alignment."
     ),
 )
 ```
 
-If this call returns `step_completed` while the correct red block remains securely held and is still being purposefully aligned, continue VLA. If the grasp is clearly established and the next motion is open-space transport, hand off to attach. If another object is grasped instead, stop and re-anchor on the red block.
+If this call returns `step_completed` while the intended mug remains securely held and is still being purposefully aligned, continue VLA. If the grasp is clearly established and the next motion is open-space transport, hand off to attach. If another object is grasped instead, stop and re-anchor on the intended mug.

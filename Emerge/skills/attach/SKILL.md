@@ -12,9 +12,7 @@ Use attach for predictable geometric motion when the path and destination are su
 
 After `object_location` returns `found: true` for the current motion target,
 attach is the default immediate handoff: coarse-approach a localized movable
-object, or transport a held object toward a localized destination. Do not skip
-straight to VLA unless the active embodiment profile explicitly marks the task
-or object as VLA-only.
+object, or transport a held object toward a localized destination.
 
 Attach should normally stop in a useful pre-manipulation region and leave final visual alignment, grasping, placement, insertion, and other fine contact to VLA. Do not use attach to guess a final wrist pose for an interaction whose success depends on camera view, contact direction, or continuous visual correction.
 
@@ -67,7 +65,7 @@ parameters={
 Use only when there is a clear reason to control the gripper independently.
 
 ```python
-parameters={"command": "open", "steps": 30}  # or "close" / "opening_m"
+parameters={"command": "open", "steps": 30}  # or "close"
 ```
 
 A completed VLA phase is not by itself a reason to open the gripper. Release according to the destination type:
