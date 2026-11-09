@@ -82,9 +82,11 @@ class RoboCasaEnvManager:
 
     @property
     def last_gripper_close(self) -> bool | None:
-        """Last applied Gym open/close command, not evidence of a grasp.
+        """Reset-default or last applied Gym command, not evidence of a grasp.
 
-        None means no reliable command since reset, close or a physics error.
+        A successful reset establishes an open command without stepping physics.
+        Later actions replace it. None means the environment is uninitialized,
+        closed or invalidated.
         The Gym wrapper closes at action12[6] >= 0.5 and opens below it.
         """
         return self._last_gripper_close
@@ -145,6 +147,9 @@ class RoboCasaEnvManager:
         else:
             obs, info = environment.reset(seed=int(seed))
         self._store_result(obs, 0.0, False, False, info)
+        # Establish the new episode's opening intent without extra settling steps.
+        # This is a command default, not a claim that the fingers are fully open.
+        self._last_gripper_close = False
         self._episode_id += 1
         try:
             # A reset may select another kitchen. Plan once for its fixtures,

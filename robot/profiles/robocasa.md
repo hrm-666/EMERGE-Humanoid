@@ -241,8 +241,15 @@ to the end-effector grip site, not the object center. Read the current end-effec
 pose from `eef_pose_world`; quaternions use XYZW order. Do not use
 `eef_pose_relative` directly as a world-frame target.
 
+`move_to_pose` holds the world-frame grip-site orientation measured at action
+start when orientation is omitted. An explicit `orientation_quat` or
+`orientation_euler` overrides it; both position and orientation must meet the
+configured pose tolerances for `pose_reached`.
+
 Geometric motion preserves the last executed gripper command by default,
-including after VLA. If `last_gripper_close` is `null`, explicitly provide
+including after VLA. A successful environment reset establishes an `open`
+command for the new episode without adding simulation steps; this does not
+assert that the fingers have already fully opened. If `last_gripper_close` is `null`, explicitly provide
 `gripper_command` (`open` / `close`) based on the current grasp state. Keep the
 gripper closed while carrying an object; do not open it merely to initialize it.
 

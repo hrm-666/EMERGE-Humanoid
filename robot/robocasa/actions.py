@@ -218,7 +218,8 @@ class RoboCasaActionController:
                        for key, keys in (("orientation_quat", "xyzw"), ("orientation_euler", ("roll", "pitch", "yaw")))
                        if key in params}
         request["orientation"] = PoseUtils.resolve_orientation(orientation)
-        request["orientation_requested"] = request["orientation"] is not None
+        # move_to_pose holds the entry orientation when no explicit target is supplied.
+        request["orientation_requested"] = action_type == "move_to_pose" or request["orientation"] is not None
         if action_type == "move_linear":
             request["settle_steps"] = max(0, int(self.config["settle_steps"]))
         return request

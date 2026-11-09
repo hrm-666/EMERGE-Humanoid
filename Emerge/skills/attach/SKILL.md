@@ -25,6 +25,13 @@ calibrated pose reported by the environment. Qualitative image descriptions,
 `found: false`, failed localization, and model-estimated coordinates are not
 motion targets.
 
+Choose reachable targets. Reach depends on the robot base pose and on the target
+orientation, so do not assume every pose inside a nominal reach radius is reachable.
+Treat a target that reports `not_converged`, or an approach that stalls short of
+the requested position, as unreachable from the current base pose; switch to a
+nearer waypoint or let VLA establish the approach instead of retrying with a
+larger budget.
+
 ## Choosing a Motion Primitive
 
 ### `move_to_pose`
@@ -37,7 +44,7 @@ execute_robot_action(
     parameters={
         "position_m": [x, y, z],
         "orientation_quat": [qx, qy, qz, qw],
-        "steps": 40,
+        "steps": 45,
     },
     reasoning="Coarse positioning in clear space before the fine phase.",
 )
@@ -45,13 +52,13 @@ execute_robot_action(
 
 ### `move_linear`
 
-Use when the path itself matters, especially for vertical lift or descent and for carrying an object through clutter. When orientation is omitted, the current wrist orientation is preserved.
+Use when the path itself matters, especially for vertical lift or descent and for carrying an object through clutter. RoboCasa `move_linear` treats an omitted orientation as position-only control: rotation error is neither commanded nor checked for convergence, so the wrist is not actively held. Pass the current measured quaternion explicitly whenever orientation must be maintained.
 
 ```python
 parameters={
     "position_m": [x, y, z],  # or "delta_m": [dx, dy, dz]
     "steps": 40,
-    "settle_steps": 30,
+    # settling is applied by the embodiment profile
 }
 ```
 
@@ -79,7 +86,7 @@ above zero; otherwise return to VLA. Do not add a separate lift test.
 
 The commanded position is the end-effector target, not the object center. For coarse approach, aim for a nearby pre-manipulation pose rather than the final contact pose.
 
-Preserve the current wrist orientation by default. `move_to_pose` requires an orientation, so reuse the current end-effector quaternion when available instead of inventing Euler angles. Change orientation only when the desired orientation is geometrically clear and does not belong to a view-sensitive fine manipulation phase.
+Preserve the current wrist orientation by default. RoboCasa `move_to_pose` accepts an omitted orientation and holds the current wrist pose when it is omitted; an explicit orientation overrides that behavior. For embodiments that require an explicit orientation, reuse the current measured end-effector quaternion instead of inventing Euler angles. Change orientation only when the desired orientation is geometrically clear and does not belong to a view-sensitive fine manipulation phase.
 
 If approaching with attach would require guessing how the wrist or camera should face the target, leave that approach to VLA.
 
@@ -96,9 +103,10 @@ If the object does not follow, open the gripper when appropriate, re-anchor on t
 ## Step Budget and Failed Motion Recovery
 
 - Explicitly set `steps` for every motion action.
-- Use about **20-30 steps** for coarse, collision-free motion and about **40-50 steps** for more careful geometric positioning.
+- For `move_to_pose`, use about **40-50 steps** for coarse, collision-free motion and about **60-70 steps** for more careful geometric positioning. This is a maximum adjustment budget; the action returns early when the target pose is reached.
+- For `move_linear`, use about **20-30 steps** for coarse motion and about **40-50 steps** for more careful positioning; these steps advance the path, followed by the embodiment's settling phase.
 - Do not request more than **100 steps** for one rule action.
-- For `move_linear`, keep `steps + settle_steps <= 100` because both the path and final settling consume simulation steps.
+- For `move_linear`, the driver applies the configured settling phase (default 40 steps) and ignores agent-supplied `settle_steps`; keep `steps + configured settle <= 100`.
 - If a target pose does not converge, do not repeat the same pose with a larger budget. Use a shorter waypoint, reduce the displacement, preserve the current orientation, or change to an appropriate `move_linear` segment.
 - A failed motion does not establish that its requested target was reached. Inspect the resulting state, but do not use a failed descent as evidence that an object is seated, supported, or ready for release.
 

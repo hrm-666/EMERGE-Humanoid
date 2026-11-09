@@ -2,7 +2,7 @@
 
 <!--
 英文原文：robot/profiles/robocasa.md
-英文原文 SHA-256：469bc70cf7251f234623c8e778dc1164591a72cc48074c17b0f559b4d07061d0
+英文原文 SHA-256：e10d14294fcbc2b85aa8660010b1991bb0c2da6fcdab53916f65eba4f0f1c1ea
 修改英文原文时，请同步修订本译文并更新上述摘要；修改译文时也应对照英文原文。
 运行时 Agent 默认使用英文原文；本文件供中文阅读。
 -->
@@ -212,8 +212,13 @@
 不是物体中心。当前末端位姿读取 `eef_pose_world`，四元数采用 XYZW
 顺序；不要将 `eef_pose_relative` 直接用于世界坐标目标。
 
+`move_to_pose` 省略朝向时，会持续保持动作开始时测得的世界坐标系 grip site
+朝向。显式提供的 `orientation_quat` 或 `orientation_euler` 会覆盖该目标；
+位置和朝向均须满足配置中的位姿容差，才会返回 `pose_reached`。
+
 几何运动默认保持最后执行的夹爪命令，包括 VLA 执行后的命令。
-若 `last_gripper_close` 为 `null`，根据当前抓取状态显式指定
+环境成功重置后，为新回合建立默认的 `open` 命令，不增加仿真步数；这不代表
+手指已经完全张开。若 `last_gripper_close` 为 `null`，根据当前抓取状态显式指定
 `gripper_command`（`open` / `close`）。携带物体时保持关闭，不要为初始化而打开夹爪。
 
 `set_gripper` 仅支持 `open` 和 `close`，不支持连续开度目标。
