@@ -1,7 +1,7 @@
 """Dispatch geometric and VLA actions through RoboCasa's action12 interface.
 
-Geometric actions servo the grip site without planning collision-free paths or
-moving the base/torso intentionally. The environment and VLA executor are borrowed.
+Arm actions servo the grip site; move_base closes the loop on local base motion.
+These primitives do not plan collision-free paths. The environment and VLA executor are borrowed.
 Only NumPy and the existing pure pose helpers are needed at import time.
 """
 
@@ -37,6 +37,8 @@ class RoboCasaActionResult:
     error_message: str | None = None
     error_stage: str | None = None
     observation_error: str | None = None
+    base_delta_m: list[float] | None = None
+    base_yaw_rad: float | None = None
 
 
 @dataclass
@@ -52,6 +54,8 @@ class _Progress:
     best_position_error: float = float("inf")
     stall_steps: int = 0
     stalled: bool = False
+    base_delta: list[float] | None = None
+    base_yaw: float | None = None
 
 
 class _Stopped(Exception):
@@ -74,6 +78,8 @@ class RoboCasaActionController:
         "settle_steps": 40,
         "gripper_steps": 30,
         "publish_every_n_steps": 5,
+        "base_position_tolerance_m": .01,
+        "base_yaw_tolerance_rad": .02,
     }
 
     _NO_PROGRESS_STEPS = 10
@@ -109,6 +115,8 @@ class RoboCasaActionController:
             progress.terminated = bool(state["terminated"])
             progress.truncated = bool(state["truncated"])
             self._check_stop(progress, cancel_check)
+            if action_type == "move_base":
+                raise _Stopped(self._move_base(request, progress, cancel_check))
             progress.stage = "control_spec"
             spec = self._environment.get_arm_control_spec()
             progress.stage = "geometry"
@@ -163,7 +171,7 @@ class RoboCasaActionController:
                 else:
                     reason = "not_converged"
         except _Stopped as exc:
-            completed, reason, message = exc.reason == "goal_reached", exc.reason, exc.message
+            completed, reason, message = exc.reason in {"goal_reached", "base_pose_reached"}, exc.reason, exc.message
             if reason in {"error", "environment_unavailable", "gripper_uninitialized"}:
                 error_stage = progress.stage
         except Exception as exc:
@@ -183,6 +191,7 @@ class RoboCasaActionController:
             total_steps=progress.steps, reason=reason,
             position_error_m=progress.position_error, rotation_error_rad=progress.rotation_error,
             error_message=message, error_stage=error_stage, observation_error=observation_error,
+            base_delta_m=progress.base_delta, base_yaw_rad=progress.base_yaw,
         )
 
     def _vla_execute(
@@ -196,6 +205,19 @@ class RoboCasaActionController:
         )
 
     def _request(self, action_type: str, params: dict[str, Any]) -> dict[str, Any]:
+        if action_type == "move_base":
+            allowed = {"forward_m", "lateral_m", "yaw_rad", "max_steps", "gripper_command"}
+            if set(params) - allowed:
+                raise ValueError(f"unknown move_base parameters: {sorted(set(params) - allowed)}")
+            delta = self._vector([params.get(k, 0.) for k in ("forward_m", "lateral_m", "yaw_rad")], "base delta")
+            steps = params.get("max_steps", 60)
+            if type(steps) is not int or not 1 <= steps <= 100:
+                raise ValueError("move_base max_steps must be an integer between 1 and 100")
+            if np.linalg.norm(delta[:2]) > .3 or abs(delta[2]) > np.pi / 4:
+                raise ValueError("move_base supports at most 0.3 m translation and pi/4 radians per call")
+            return {"delta": delta, "steps": steps, "gripper": (
+                self._gripper_command(params["gripper_command"]) if "gripper_command" in params else None
+            )}
         if action_type not in {"move_to_pose", "move_linear", "set_gripper"}:
             raise ValueError(f"unsupported RoboCasa geometric action {action_type!r}")
         if params.get("frame", "world") != "world":
@@ -223,6 +245,95 @@ class RoboCasaActionController:
         if action_type == "move_linear":
             request["settle_steps"] = max(0, int(self.config["settle_steps"]))
         return request
+
+    def _move_base(
+        self, request: dict[str, Any], progress: _Progress,
+        cancel_check: Callable[[], str | None] | None,
+    ) -> str:
+        """Follow a target in the starting base frame, then apply bounded braking."""
+        from scipy.spatial.transform import Rotation
+
+        progress.stage = "control_spec"
+        low, high = self._environment.get_base_control_limits()
+        progress.stage = "geometry"
+        start, quat = self._environment.get_base_pose()
+        start_yaw = Rotation.from_quat(quat).as_euler("xyz")[2]
+
+        def planar_rotation(yaw: float) -> np.ndarray:
+            c, s = np.cos(yaw), np.sin(yaw)
+            return np.array([[c, -s], [s, c]])
+        start_rotation = planar_rotation(start_yaw)
+        target = start[:2] + start_rotation @ request["delta"][:2]
+        target_yaw = start_yaw + request["delta"][2]
+        progress.stage = "gripper_state"
+        gripper = request["gripper"]
+        if gripper is None:
+            gripper = self._environment.last_gripper_close
+        if gripper is None:
+            raise _Stopped("gripper_uninitialized", "provide gripper_command before base motion")
+
+        def measure() -> tuple[np.ndarray, float]:
+            progress.stage = "geometry"
+            position, quat = self._environment.get_base_pose()
+            yaw = Rotation.from_quat(quat).as_euler("xyz")[2]
+            error = target - position[:2]
+            angle = (target_yaw - yaw + np.pi) % (2 * np.pi) - np.pi
+            progress.position_error = float(np.linalg.norm(error))
+            progress.rotation_error = float(abs(angle))
+            progress.base_delta = (start_rotation.T @ (position[:2] - start[:2])).tolist()
+            progress.base_yaw = float((yaw - start_yaw + np.pi) % (2 * np.pi) - np.pi)
+            return planar_rotation(yaw).T @ error, angle
+
+        def refresh() -> None:
+            # A step that stops early has cleared diagnostics before moving; read
+            # the post-step pose so last_execution still reports actual motion.
+            if not self._environment.is_connected():
+                return
+            try:
+                measure()
+            except Exception:
+                pass
+
+        settled, best, stalled = 0, float("inf"), 0
+        try:
+            for index in range(request["steps"]):
+                local_error, angle = measure()
+                reached = (progress.position_error <= self.config["base_position_tolerance_m"]
+                           and progress.rotation_error <= self.config["base_yaw_tolerance_rad"])
+                if reached and (settled >= 2 or not np.any(request["delta"])):
+                    return "base_pose_reached"
+                action = np.zeros(12)
+                action[6], action[11] = float(gripper), 1.  # arm follows the moving base; torso delta stays zero
+                if reached or index >= request["steps"] - 2:
+                    settled += 1
+                else:
+                    settled = 0
+                    error = np.r_[local_error, angle]
+                    command = np.sign(error) * np.clip(4. * np.abs(error), .35, .5)
+                    command[:2] *= np.abs(local_error) > self.config["base_position_tolerance_m"] / 2
+                    command[:2] *= progress.position_error > self.config["base_position_tolerance_m"]
+                    command[2] *= progress.rotation_error > self.config["base_yaw_tolerance_rad"]
+                    action[7:10] = np.clip(command, low, high)
+                    score = progress.position_error + .2 * progress.rotation_error
+                    if score < best - .0005:
+                        best, stalled = score, 0
+                    else:
+                        stalled += 1
+                    if stalled >= self._NO_PROGRESS_STEPS:
+                        action[7:10] = 0.
+                        for _ in range(min(2, request["steps"] - progress.steps)):
+                            self._step_native(action, progress, cancel_check)
+                        measure()
+                        return "stalled"
+                self._step_native(action, progress, cancel_check)
+        except _Stopped:
+            refresh()
+            raise
+        measure()
+        return "base_pose_reached" if (
+            settled >= 2 and progress.position_error <= self.config["base_position_tolerance_m"]
+            and progress.rotation_error <= self.config["base_yaw_tolerance_rad"]
+        ) else "not_converged"
 
     def _check_stop(self, progress: _Progress, cancel_check: Callable[[], str | None] | None) -> None:
         progress.stage = "environment_state"
@@ -326,12 +437,20 @@ class RoboCasaActionController:
         action[:6] = np.clip(arm, spec["input_min"], spec["input_max"])
         action[6] = float(gripper)
         # action[7:10]: base velocities; [10]: torso delta; [11]=0: arm mode.
+        self._step_native(action, progress, cancel_check)
+
+    def _step_native(
+        self, action: np.ndarray, progress: _Progress,
+        cancel_check: Callable[[], str | None] | None,
+    ) -> None:
+        """Share stepping, budget checks, cancellation and publication across primitives."""
         self._check_stop(progress, cancel_check)
         progress.stage = "environment_step"
         before = self._environment.action_steps
         # Even a step that raises before its counter increments may have changed
         # physics. Do not expose pre-step errors as measurements of that state.
         progress.position_error = progress.rotation_error = None
+        progress.base_delta = progress.base_yaw = None
         try:
             _, _, progress.terminated, progress.truncated, _ = self._environment.step(
                 action, publish_observation=False

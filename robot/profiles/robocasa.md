@@ -3,7 +3,7 @@
 Driver: `robocasa`
 
 This embodiment uses RoboCasa's PandaOmron mobile manipulator. The driver supports
-`vla_execute`, `move_to_pose`, `move_linear`, and `set_gripper`.
+`vla_execute`, `move_to_pose`, `move_linear`, `set_gripper`, and `move_base`.
 Use `object_location` and `task_verification` to inform planning and check outcomes.
 
 **Remember to keep the plan up to date.**
@@ -236,7 +236,7 @@ rewriting the policy prompt. `step` is a positive policy action budget.
 
 Follow the attach and VLA skills for action parameters, step budgets, and recovery.
 
-Geometric actions use world coordinates in metres. The target position refers
+Arm geometric actions use world coordinates in metres. The target position refers
 to the end-effector grip site, not the object center. Read the current end-effector
 pose from `eef_pose_world`; quaternions use XYZW order. Do not use
 `eef_pose_relative` directly as a world-frame target.
@@ -254,3 +254,36 @@ assert that the fingers have already fully opened. If `last_gripper_close` is `n
 gripper closed while carrying an object; do not open it merely to initialize it.
 
 `set_gripper` supports only `open` and `close`, not continuous opening targets.
+
+### Local Base Movement
+
+Use `move_base` for small stance changes when visibility, reach, or approach
+direction is unsuitable. Choose a visibly clear local path before moving;
+this primitive does not plan around obstacles or establish contact with fixtures.
+
+```python
+execute_robot_action(
+    action_type="move_base",
+    parameters={"forward_m": 0.10, "lateral_m": 0.0, "yaw_rad": 0.0, "max_steps": 60},
+    reasoning="Adjust the stance along a clear path before continuing VLA.",
+)
+```
+
+Distances are measured in the base frame at call start: `forward_m` follows
+local +X, `lateral_m` follows local +Y, and positive `yaw_rad` turns counterclockwise.
+Omitted distances and angle default to zero. Each call allows at most 0.3 m
+combined translation, pi/4 radians rotation, and 1–100 `max_steps` (default 60).
+The arm follows the moving base, torso motion is not requested, and the last
+gripper intent is preserved; `gripper_command` can explicitly select `open` or `close`.
+
+`base_pose_reached` means the base target was reached and braking steps were
+applied within the budget. `stalled` means the path is blocked: do not repeat
+the same request; choose a different direction or leave the adjustment to VLA.
+`not_converged` means the budget ran out before arrival. Neither establishes
+arrival. The final two steps of a request are braking, so use at least three
+steps for any motion.
+A zero-distance, zero-angle request completes without advancing physics.
+Read actual `base_delta_m`, `base_yaw_rad` and pose errors in `last_execution`.
+All movement and braking steps share the episode budget. After moving, inspect
+fresh images and robot state, and re-localize motion targets as needed. The next
+VLA call rebuilds its history while keeping the original task instruction.

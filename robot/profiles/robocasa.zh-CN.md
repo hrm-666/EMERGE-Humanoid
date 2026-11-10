@@ -2,7 +2,7 @@
 
 <!--
 英文原文：robot/profiles/robocasa.md
-英文原文 SHA-256：1ccd41981ed920f3ab649009af890f6bdfa771ce6ec36801fb4c33bae091eee4
+英文原文 SHA-256：725aa0238e1d1746eda2ebc794a70e42f6b10cc07a5cbbe4ed00cb2d83b753c5
 修改英文原文时，请同步修订本译文并更新上述摘要；修改译文时也应对照英文原文。
 运行时 Agent 默认使用英文原文；本文件供中文阅读。
 -->
@@ -10,7 +10,7 @@
 驱动：`robocasa`
 
 本构型使用 RoboCasa 中的 PandaOmron 移动操作机器人。驱动支持 `vla_execute`、
-`move_to_pose`、`move_linear` 和 `set_gripper`。
+`move_to_pose`、`move_linear`、`set_gripper` 和 `move_base`。
 使用 `object_location` 和 `task_verification` 为规划提供依据并检查操作结果。
 
 
@@ -208,7 +208,7 @@
 
 遵循 attach 和 VLA 技能的动作参数、步数预算及恢复指导。
 
-几何动作使用世界坐标系，单位为米，目标位置对应末端 grip site，
+机械臂几何动作使用世界坐标系，单位为米，目标位置对应末端 grip site，
 不是物体中心。当前末端位姿读取 `eef_pose_world`，四元数采用 XYZW
 顺序；不要将 `eef_pose_relative` 直接用于世界坐标目标。
 
@@ -222,3 +222,31 @@
 `gripper_command`（`open` / `close`）。携带物体时保持关闭，不要为初始化而打开夹爪。
 
 `set_gripper` 仅支持 `open` 和 `close`，不支持连续开度目标。
+
+### 局部底盘移动
+
+当视野、可达距离或接近方向不合适时，可用 `move_base` 小幅调整站位。
+移动前先确认局部路径可见且畅通；该原语不规划绕障路径，也不负责与固定结构接触。
+
+```python
+execute_robot_action(
+    action_type="move_base",
+    parameters={"forward_m": 0.10, "lateral_m": 0.0, "yaw_rad": 0.0, "max_steps": 60},
+    reasoning="Adjust the stance along a clear path before continuing VLA.",
+)
+```
+
+距离以调用开始时的底盘坐标系为准：`forward_m` 沿局部 +X，`lateral_m` 沿局部 +Y，
+`yaw_rad` 为正时逆时针转向。省略的距离和角度默认为零。单次合成平移不超过 0.3 米，
+转角不超过 pi/4 弧度；`max_steps` 为 1–100 的整数，默认 60。
+机械臂随底盘移动，不主动改变躯干高度，并保留上次夹爪意图；
+可用 `gripper_command` 显式选择 `open` 或 `close`。
+
+`base_pose_reached` 表示在预算内到达底盘目标且执行了制动步数。
+`stalled` 表示路径被阻挡：不要重复同一请求，应换一个方向，或把调整交给 VLA。
+`not_converged` 表示预算耗尽前尚未到达；两者都不代表到达。
+每个请求的最后两步用于制动，因此任何移动至少应给 3 步。
+距离与转角均为零时，动作直接完成，不推进仿真。
+通过 `last_execution` 中的 `base_delta_m`、`base_yaw_rad` 和位姿误差检查实际运动。
+移动与制动均计入整局步数预算。移动后查看新图像与机器人状态，按需重新定位运动目标；
+后续 VLA 会重建历史，仍使用原始任务指令。

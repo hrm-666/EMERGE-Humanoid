@@ -54,6 +54,9 @@ and do not invent a `move_to_pose` or `move_linear` target after an unsuccessful
 VLA call. Continue from a clearly useful visible state with VLA, or stop when no
 safe useful action remains.
 
+When the embodiment provides `move_base`, a small local stance adjustment may
+restore visibility or reach before another VLA attempt; leave fixture contact to VLA.
+
 ## Multi-Object and Long-Horizon Instructions
 
 A full task may naturally require several VLA chunks. Track the current subgoal

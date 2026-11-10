@@ -4,6 +4,8 @@
 
 `dev/robocasa_driver.json` 当前默认选择 RLDX。下面的 OpenPI 示例通过 `--policy-backend openpi` 显式选择后端。RLDX 的启动方法见本页末尾。
 
+RoboCasa 支持 `move_base` 局部底盘调整：`forward_m`、`lateral_m` 和 `yaw_rad` 相对于调用开始时的底盘姿态，`max_steps` 默认 60、最多 100。单次平移上限 0.3 米，旋转上限 pi/4；使用当前位姿反馈闭环到达并制动，所有步骤计入整局预算。实际位移、转角及剩余误差写入现有动作记录。该原语保持夹爪意图并使机械臂随底盘运动；不提供绕障导航。完整参数与使用时机见 RoboCasa profile。
+
 ## 运行准备
 
 - RoboCasa Python 环境能创建原生 PandaOmron 任务，并能导入本仓库的 Controller。

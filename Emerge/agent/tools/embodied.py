@@ -66,6 +66,7 @@ class EmbodiedActionTool(Tool):
                         "- 'move_to_pose': Move end-effector to target position and orientation\n"
                         "- 'move_linear': Move end-effector linearly (straight line) to target or by delta\n"
                         "- 'set_gripper': Open or close the gripper\n"
+                        "- 'move_base': Move the mobile base by local distances and yaw when the active embodiment supports it\n"
                         "- 'follow_arc': Move end-effector along an arc (circular motion)\n"
                         "- 'vla_execute': Execute the task instruction required by the active embodiment profile using the VLA policy\n"
                         "- 'navigate_vln': Follow a navigation instruction with LightNav when the active embodiment supports it\n"
@@ -83,6 +84,7 @@ class EmbodiedActionTool(Tool):
                         "- move_to_pose: {position_m: [x,y,z], orientation_euler: [r,p,y]} or {orientation_quat: [x,y,z,w]}; an embodiment may also accept a measured bounding box\n"
                         "- move_linear: {position_m: [x,y,z]} or {delta_m: [dx,dy,dz]}, optionally with orientation\n"
                         "- set_gripper: {command: 'open'} or {command: 'close'}\n"
+                        "- move_base: {forward_m: 0.1, lateral_m: 0.0, yaw_rad: 0.0, max_steps: 60}\n"
                         "- follow_arc: {center: [x,y,z], axis: [x,y,z], radius_m: 0.1, angle_deg: 90}\n"
                         "- vla_execute: {instruction: '<instruction from the profile-specified source>', step: 40}\n"
                         "- navigate_vln: {instruction: 'Approach the radio', max_steps: 900}\n"
@@ -163,7 +165,7 @@ class EmbodiedActionTool(Tool):
             except (TypeError, ValueError):
                 step = 0
             return _BASE_RESULT_TIMEOUT_S + step * _VLA_PER_STEP_TIMEOUT_S
-        if action_type in {"move_to_pose", "move_linear", "adjust_posture"}:
+        if action_type in {"move_to_pose", "move_linear", "adjust_posture", "move_base"}:
             # BEHAVIOR may need up to primitive_max_steps simulator round
             # trips.  The geometric action parameters do not expose that
             # generated trajectory length to the Agent tool.

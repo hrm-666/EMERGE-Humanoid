@@ -100,7 +100,7 @@ If the object does not follow, open the gripper when appropriate, re-anchor on t
 
 ## Step Budget and Failed Motion Recovery
 
-- Explicitly set `steps` for every motion action.
+- Explicitly set `steps` for arm/gripper actions and `max_steps` for `move_base` when the embodiment provides it.
 - For `move_to_pose`, use about **40-50 steps** for coarse, collision-free motion and about **60-70 steps** for more careful geometric positioning. This is a maximum adjustment budget; the action returns early when the target pose is reached.
 - For `move_linear`, use about **20-30 steps** for coarse motion and about **40-50 steps** for more careful positioning; these steps advance the path, followed by the embodiment's settling phase.
 - Do not request more than **100 steps** for one rule action.

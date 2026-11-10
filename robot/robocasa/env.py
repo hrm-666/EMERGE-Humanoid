@@ -271,6 +271,13 @@ class RoboCasaEnvManager:
                for key in ("input_min", "input_max", "output_min", "output_max")},
         }
 
+    def get_base_control_limits(self) -> tuple[np.ndarray, np.ndarray]:
+        """Read the native three-channel mobile-base velocity command limits."""
+        controller = self._right_robot().composite_controller.part_controllers["base"]
+        if controller.name != "JOINT_VELOCITY" or controller.control_dim != 3:
+            raise RuntimeError("move_base requires a three-channel JOINT_VELOCITY base controller")
+        return tuple(np.array(value, dtype=float, copy=True) for value in controller.control_limits)
+
     def get_gripper_qpos(self) -> np.ndarray:
         return self._observation_vector("state.gripper_qpos")
 
