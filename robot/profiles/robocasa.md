@@ -86,6 +86,44 @@ Preserve required object counts, categories, relative positions, container
 contents, and final door or switch states. After a failure, recover the
 unfinished phases from the current state.
 
+### CloseBlenderLid (task: "Close the lid blender by securely placing the lid on top.")
+
+- Measured attach approach, then one continuous VLA phase through grasp, transfer,
+  alignment, and release.
+- Release only when fresh views show the lid centered, level, and at rim height;
+  retract vertically, then clear laterally by >0.15 m. If off-center or VLA stalls,
+  re-localize and change the grasp/placement; never guess a high-edge target from a bbox.
+
+### CoffeeSetupMug (task: "Pick the mug from the counter and place it under the coffee machine dispenser.")
+
+- Expose the machine; localize the mug and perforated drip tray (not the dispenser
+  face or front counter); re-localize after base motion or machine contact.
+- Keep the mug upright and gripper closed; prefer one continuous VLA phase without
+  small base/arm moves; if stalled, route around an exposed machine end in short segments.
+- Place centered on the tray, release when supported, then withdraw the open gripper
+  horizontally by >0.25 m before lifting.
+
+### TurnOffStove
+
+- Identify the instructed burner's knob (hub + radial grip), not the oven-handle
+  mounts; clear the arm ~0.20 m away and 0.15 m up for a close oblique view.
+- Let VLA approach, engage, and rotate as one continuous phase; if a chunk ends with
+  the panel visible, continue the same native instruction without manual moves.
+- After each chunk, confirm the knob row is in view; if the stove leaves the frame,
+  restore the view/stance first. Wrist rotation or gripper closure does not prove
+  the burner is off.
+
+### TurnOnSinkFaucet (task: "Turn on the sink faucet.")
+
+- Target the short thin lever, not the arched spout or outlet; localize its raised
+  surface; re-localize after any base or wrist change.
+- Approach via a nearby hover in <0.30 m segments; straighten a tilted wrist, descend
+  from ~0.08 m above to ~0.02 m below the lever's upper surface, close, lift; use short
+  geometric steps or a bounded VLA chunk, not one long VLA.
+- Check official success and visible water; a grasp, moved spout, or timeout is not
+  success. If unchanged and water is off, retract, re-localize, retry; adjust the base
+  if reach/visibility is poor, or restage the wrist and try a bounded full-body VLA.
+
 ## Target Identity
 
 For ambiguous targets, combine:
