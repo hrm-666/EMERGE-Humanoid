@@ -2,7 +2,7 @@
 
 import difflib
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from Emerge.base import Tool
 
@@ -42,8 +42,12 @@ class _FsTool(Tool):
         return _resolve_path(path, self._workspace, self._allowed_dir)
 
     def _protected_write_error(self, path: Path) -> str | None:
-        if path not in self._protected_paths:
+        if not any(path == protected or path.is_relative_to(protected) for protected in self._protected_paths):
             return None
+        if self._workspace and path.is_relative_to((self._workspace / "memory/reference").resolve()):
+            return "Error: reference memory is read-only for file tools and maintained by the memory updater; retrieve it with search_reference_memory."
+        if self._workspace and path.is_relative_to((self._workspace / "memory").resolve()):
+            return "Error: planning memory is maintained by the runtime; record current decisions in PLAN."
         return (
             f"Error: {path.name} is managed by a dedicated tool and cannot be modified "
             "with write_file/edit_file. Use the main agent's update_plan tool instead."
@@ -60,6 +64,10 @@ class ReadFileTool(_FsTool):
     _MAX_CHARS = 128_000
     _DEFAULT_LIMIT = 2000
 
+    def __init__(self, *args, skill_cache: Callable[[str], str | None] | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._skill_cache = skill_cache
+
     @property
     def name(self) -> str:
         return "read_file"
@@ -68,7 +76,8 @@ class ReadFileTool(_FsTool):
     def description(self) -> str:
         return (
             "Read the contents of a file. Returns numbered lines. "
-            "Use offset and limit to paginate through large files."
+            "Use offset and limit to paginate through large files. "
+            "Skills already in Active Skills need no reread; use their instructions directly."
         )
 
     @property
@@ -98,6 +107,11 @@ class ReadFileTool(_FsTool):
                 return f"Error: File not found: {path}"
             if not fp.is_file():
                 return f"Error: Not a file: {path}"
+
+            if fp.name == 'SKILL.md' and self._skill_cache:
+                cached = self._skill_cache(str(fp))
+                if cached:
+                    return cached
 
             all_lines = fp.read_text(encoding="utf-8").splitlines()
             total = len(all_lines)
@@ -191,13 +205,13 @@ def _find_match(content: str, old_text: str) -> tuple[str | None, int]:
     old_lines = old_text.splitlines()
     if not old_lines:
         return None, 0
-    stripped_old = [l.strip() for l in old_lines]
+    stripped_old = [line.strip() for line in old_lines]
     content_lines = content.splitlines()
 
     candidates = []
     for i in range(len(content_lines) - len(stripped_old) + 1):
         window = content_lines[i : i + len(stripped_old)]
-        if [l.strip() for l in window] == stripped_old:
+        if [line.strip() for line in window] == stripped_old:
             candidates.append("\n".join(window))
 
     if candidates:

@@ -10,14 +10,8 @@ from typing import Callable
 from loguru import logger
 
 from Emerge.runtime.configuration import load_runtime_config
-from Emerge.runtime.protocol import RunError
-from Emerge.runtime.protocol import RunEvent
-from Emerge.runtime.protocol import RunRequest
-from Emerge.runtime.protocol import RunResult
-from Emerge.runtime.protocol import utc_now
-from Emerge.runtime.storage import RunArtifacts
-from Emerge.runtime.storage import WorkspaceLease
-from Emerge.runtime.storage import redact
+from Emerge.runtime.protocol import RunError, RunEvent, RunRequest, RunResult, utc_now
+from Emerge.runtime.storage import RunArtifacts, WorkspaceLease, redact
 
 
 def build_agent(config):
@@ -32,6 +26,7 @@ def build_agent(config):
         model=config.agents.defaults.model,
         max_iterations=config.agents.defaults.max_tool_iterations,
         context_window_tokens=config.agents.defaults.context_window_tokens,
+        planning_memory_config=config.agents.defaults.planning_memory,
         exec_config=config.tools.exec, restrict_to_workspace=config.tools.restrict_to_workspace,
         object_location_subagent_config=config.subagents.object_location,
         task_verification_subagent_config=config.subagents.task_verification,

@@ -90,13 +90,18 @@ class BaseSubagent:
         context = self.context_builder.build(task)
         tools_used: list[str] = []
 
+        usage = {}
         for iteration in range(1, self.max_iterations + 1):
             llm_started = time.perf_counter()
-            response = await self.provider.chat_with_retry(
-                messages=context.messages,
-                tools=self.tools.get_definitions(),
-                model=self.model,
-            )
+            from Emerge.providers.telemetry import call_metadata
+            with call_metadata(agent=self.name, iteration=iteration, task_id=task.task_id):
+                response = await self.provider.chat_with_retry(
+                    messages=context.messages,
+                    tools=self.tools.get_definitions(),
+                    model=self.model,
+                )
+            for key, value in response.usage.items():
+                usage[key] = usage.get(key, 0) + value
             logger.info(
                 "Sub-agent LLM timing | agent={} iteration={} model={} elapsed={:.3f}s",
                 self.name,
@@ -110,7 +115,7 @@ class BaseSubagent:
                     task,
                     self.name,
                     response.content or "The model returned an error",
-                    metadata={"iterations": iteration, "tools_used": tools_used},
+                    metadata={"iterations": iteration, "tools_used": tools_used, "usage": dict(usage)},
                 )
 
             if response.has_tool_calls:
@@ -138,7 +143,7 @@ class BaseSubagent:
                         metadata={
                             "iterations": iteration,
                             "tools_used": tools_used,
-                            "usage": response.usage,
+                            "usage": dict(usage),
                         },
                     )
                 continue
@@ -155,7 +160,7 @@ class BaseSubagent:
                 metadata={
                     "iterations": iteration,
                     "tools_used": tools_used,
-                    "usage": response.usage,
+                    "usage": dict(usage),
                 },
             )
 
@@ -163,7 +168,7 @@ class BaseSubagent:
             task,
             self.name,
             f"Maximum tool iterations reached ({self.max_iterations})",
-            metadata={"iterations": self.max_iterations, "tools_used": tools_used},
+            metadata={"iterations": self.max_iterations, "tools_used": tools_used, "usage": dict(usage)},
         )
 
     def _tool_work_complete(self) -> bool:

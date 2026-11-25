@@ -16,6 +16,7 @@ try:
 except ImportError:  # pragma: no cover - fallback for lightweight test envs
     logger = logging.getLogger(__name__)
 
+from Emerge.agent.tools.update_plan import ROUTE_COMPARISON_SCHEMA, ROUTE_EVENT_SCHEMA
 from Emerge.base import Tool
 from Emerge.utils.action_queue import action_timestamp
 from Emerge.utils.action_queue import append_action
@@ -26,7 +27,7 @@ from Emerge.utils.action_queue import pending_action_type
 from Emerge.utils.action_queue import update_action_document
 
 if TYPE_CHECKING:
-    from Emerge.agent.visual_monitor import VisualInterruptCoordinator
+    from Emerge.agent.visual_monitor import VisualInterruptCoordinator, VisualMonitor
 
 _BASE_RESULT_TIMEOUT_S = 60.0
 _VLA_PER_STEP_TIMEOUT_S = 15.0
@@ -109,6 +110,15 @@ class EmbodiedActionTool(Tool):
                     "type": "string",
                     "description": "The reasoning behind choosing this action.",
                 },
+                "route_progress": {
+                    "type": "object",
+                    "description": "Persist route progress with this action. comparison survives local moves; segment_event advances the segment on arrival, exit choice or invalidation.",
+                    "properties": {"current_area": {"type": "string", "maxLength": 400},
+                                   "next_route": {"type": "string", "maxLength": 400},
+                                   "segment_event": ROUTE_EVENT_SCHEMA,
+                                   "comparison": ROUTE_COMPARISON_SCHEMA},
+                    "required": ["current_area", "next_route"], "additionalProperties": False,
+                },
             },
             "required": ["action_type", "parameters", "reasoning"],
         }
@@ -117,9 +127,11 @@ class EmbodiedActionTool(Tool):
         self,
         workspace: Path,
         visual_interrupts: VisualInterruptCoordinator | None = None,
+        visual_monitor: VisualMonitor | None = None,
     ):
         self.workspace = workspace
         self.visual_interrupts = visual_interrupts
+        self.visual_monitor = visual_monitor
         self.active_action_ids: set[str] = set()
         self.on_event = None
 
@@ -128,6 +140,7 @@ class EmbodiedActionTool(Tool):
         action_type: str,
         parameters: dict[str, Any],
         reasoning: str,
+        route_progress: dict[str, Any] | None = None,
     ) -> str:
         """Validate and enqueue an action in the active workspace."""
         embodied_file = self.workspace / "EMBODIED.md"
@@ -136,12 +149,26 @@ class EmbodiedActionTool(Tool):
         if not embodied_file.exists():
             return f"Error: {embodied_file.name} not found for the target robot. Cannot dispatch action."
 
+        if route_progress is not None:
+            from Emerge.agent.tools.update_plan import UpdatePlanTool
+            try:
+                route = UpdatePlanTool(self.workspace).advance_route(**route_progress)
+            except (ValueError, TypeError, OSError) as exc:
+                return f'Error: route progress was not saved: {exc}'
+            if self.on_event:
+                from Emerge.runtime.snapshots import plan_snapshot
+                self.on_event('plan.route_updated', {'next_route': route,
+                                                   'current_area': route_progress['current_area']})
+                self.on_event('plan.updated', plan_snapshot(self.workspace))
+
         logger.info("Dispatching action: {} {}", action_type, parameters)
         accepted = self._accept_action(action_type, parameters, action_file)
         if isinstance(accepted, str):
             return accepted
         dispatch_message, action_id = accepted
         self.active_action_ids.add(action_id)
+        if self.visual_monitor is not None:
+            self.visual_monitor.track_action(action_id, action_type, parameters, reasoning)
         if self.on_event:
             self.on_event(
                 "action.updated", {
@@ -149,13 +176,25 @@ class EmbodiedActionTool(Tool):
                     "action_type": action_type,
                     "status": "pending"
                 })
-        return await self._wait_for_action_result(
+        result = await self._wait_for_action_result(
             action_file,
             action_id=action_id,
             dispatch_message=dispatch_message,
             timeout_s=self._result_timeout(action_type, parameters),
             allow_visual_completion=action_type != "dock_to_station",
         )
+
+        if self.visual_monitor is not None:
+            try:
+                memory = await self.visual_monitor.finish_action(action_id)
+            except Exception as exc:
+                logger.warning("Visual memory unavailable for {}: {}", action_id, exc)
+                memory = "Visual memory unavailable; use fresh observations for verification."
+            if action_type in {"navigate", "navigate_vln"}:
+                result += f"\nLocal action/image evidence archived under action {action_id}; inspect the current camera."
+            else:
+                result += "\n\n" + memory
+        return result
 
     @staticmethod
     def _result_timeout(action_type: str, parameters: dict[str, Any]) -> float:

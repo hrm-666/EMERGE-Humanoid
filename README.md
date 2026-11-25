@@ -240,3 +240,7 @@ For additional startup options and health-check endpoints, see
 - [Standard LIBERO Evaluation](scripts/Libero_eval/README.md)
 - [LIBERO-Plus Robustness Evaluation](scripts/LiberoPlus_eval/README.md)
 - [LIBERO-Pro Evaluation](scripts/LiberoPro_eval/README.md)
+
+## Spatial and execution memory: space-exp-mem
+
+See [the memory integration guide](docs/space-exp-mem.md) for compact task/spatial/experience memory, evidence retrieval, incremental updates, snapshot reuse and offline checks. Existing robot skills and controllers remain independently integrated.

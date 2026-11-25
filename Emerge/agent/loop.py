@@ -8,37 +8,42 @@ import os
 import re
 import sys
 import time
-from uuid import uuid4
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Awaitable, Callable
+from uuid import uuid4
 
 from loguru import logger
 
 from Emerge.agent.context import ContextBuilder
+from Emerge.agent.memory import MemoryConsolidator
+from Emerge.agent.planning_context import PlanningContext
+from Emerge.agent.planning_memory import PlanningMemory
+from Emerge.agent.tools.delegate import DelegateSubagentTool
+from Emerge.agent.tools.embodied import EmbodiedActionTool
+from Emerge.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
+from Emerge.agent.tools.message import MessageTool
+from Emerge.agent.tools.scene_graph import SceneGraphQueryTool
+from Emerge.agent.tools.search_action_memory import SearchActionMemoryTool
+from Emerge.agent.tools.search_reference_memory import SearchReferenceMemoryTool
+from Emerge.agent.tools.shell import ExecTool
+from Emerge.agent.tools.update_plan import UpdatePlanTool
+from Emerge.agent.tools.view_image import ViewImageTool
 from Emerge.agent.visual_monitor import (
     VisualInterruptCoordinator,
     VisualMonitor,
 )
-from Emerge.agent.tools.delegate import DelegateSubagentTool
-from Emerge.agent.memory import MemoryConsolidator
-from Emerge.agent.tools.embodied import EmbodiedActionTool
-from Emerge.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
-from Emerge.agent.tools.message import MessageTool
 from Emerge.base import ToolRegistry
-from Emerge.agent.tools.scene_graph import SceneGraphQueryTool
-from Emerge.agent.tools.shell import ExecTool
-from Emerge.agent.tools.update_plan import UpdatePlanTool
 from Emerge.bus.events import InboundMessage, OutboundMessage
 from Emerge.bus.queue import MessageBus
 from Emerge.providers.base import LLMProvider
-from Emerge.subagents import SubagentRegistry
+from Emerge.session.manager import Session, SessionManager
+from Emerge.subagents import SubagentRegistry, SubagentToolResult
 from Emerge.subagents.object_location import (
     build_object_location_subagent,
 )
 from Emerge.subagents.task_verification import (
     build_task_verification_subagent,
 )
-from Emerge.session.manager import Session, SessionManager
 
 if TYPE_CHECKING:
     from Emerge.config.schema import (
@@ -81,10 +86,12 @@ class AgentLoop:
             TaskVerificationSubagentConfig | None
         ) = None,
         visual_monitor_config: VisualMonitorConfig | None = None,
+        planning_memory_config=None,
     ):
         from Emerge.config.schema import (
             ExecToolConfig,
             ObjectLocationSubagentConfig,
+            PlanningMemoryConfig,
             TaskVerificationSubagentConfig,
             VisualMonitorConfig,
         )
@@ -138,6 +145,10 @@ class AgentLoop:
                     monitor_config.verification_timeout_seconds
                 ),
                 confirmations=monitor_config.confirmations,
+                capture_interval_seconds=monitor_config.capture_interval_seconds,
+                sample_every_n_frames=monitor_config.sample_every_n_frames,
+                buffer_max_frames=monitor_config.buffer_max_frames,
+                record_only=monitor_config.record_only,
             )
 
         self.on_event = None
@@ -156,6 +167,11 @@ class AgentLoop:
             build_messages=self.context.build_messages,
             get_tool_definitions=self.tools.get_definitions,
         )
+        self.planning_memory_config = planning_memory_config or PlanningMemoryConfig()
+        self.planning_memory = PlanningMemory(workspace, provider, self.model,
+                                               self.planning_memory_config, self._emit)
+        self.planning_context = PlanningContext(self.context, self.planning_memory_config, self._emit)
+        self._planning_turn = None
         self._register_default_tools()
         # Load env variables
         try:
@@ -168,15 +184,20 @@ class AgentLoop:
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
         allowed_dir = self.workspace if self.restrict_to_workspace else None
-        protected_paths = {self.workspace / "PLAN.md"}
+        protected_paths = {self.workspace / "PLAN.md", self.workspace / "memory/reference",
+                           self.workspace / "memory/MEMORY.md", self.workspace / "memory/planning_state.json"}
         for cls in (ReadFileTool, WriteFileTool, EditFileTool, ListDirTool):
             self.tools.register(
                 cls(
                     workspace=self.workspace,
                     allowed_dir=allowed_dir,
                     protected_paths=protected_paths,
+                    **({'skill_cache': self.context.cached_skill_reply} if cls is ReadFileTool else {}),
                 )
             )
+        self.tools.register(ViewImageTool(workspace=self.workspace, allowed_dir=allowed_dir))
+        self.tools.register(SearchActionMemoryTool(self.workspace))
+        self.tools.register(SearchReferenceMemoryTool(self.workspace))
         self.tools.register(UpdatePlanTool(workspace=self.workspace))
         self.tools.register(ExecTool(
             working_dir=str(self.workspace),
@@ -185,10 +206,11 @@ class AgentLoop:
             path_append=self.exec_config.path_append,
         ))
         self.tools.register(MessageTool())
-        self.tools.register(DelegateSubagentTool(self.subagent_registry))
+        self.tools.register(DelegateSubagentTool(self.subagent_registry, workspace=self.workspace, on_event=self._emit))
 
         action_tool = EmbodiedActionTool(
             workspace=self.workspace,
+            visual_monitor=self.visual_monitor,
             visual_interrupts=(
                 self.visual_interrupts if self.visual_monitor is not None else None
             ),
@@ -206,7 +228,13 @@ class AgentLoop:
 
     async def aclose(self) -> None:
         self.stop()
-        self._stop_visual_monitor()
+        await self._stop_visual_monitor()
+        if self.planning_memory_config.enabled:
+            # The monitor can finish recording the last action during shutdown.
+            await self.planning_memory.flush(run_id=self.run_id)
+            if self._planning_turn:
+                messages, turn_start = self._planning_turn
+                self.planning_memory.refresh_working(messages, turn_start, self.run_id)
         await self.provider.aclose()
 
     @staticmethod
@@ -234,6 +262,19 @@ class AgentLoop:
     ) -> tuple[str | None, list[str], list[dict]]:
         """Run the agent iteration loop."""
         messages = initial_messages
+        turn_start = len(initial_messages) - 1
+        self._planning_turn = (messages, turn_start)
+        if self.planning_memory.read_only:
+            reference = self.planning_memory.reference
+            root, bundle = reference.load()
+            for name, digest in bundle['documents'].items():
+                reference._read(root, name, digest)
+            self._emit('memory.read_only', {
+                'snapshot': root.name, 'documents': bundle['documents'],
+                'policy': 'frozen_read_only', 'summary_updates': False,
+                'working_memory_updates': False})
+        self._emit('context.skills_loaded', {'skills': self.context.active_skill_inventory(),
+                                            'lifetime': 'current_command'})
         iteration = 0
         final_content = None
         tools_used: list[str] = []
@@ -242,20 +283,37 @@ class AgentLoop:
             iteration += 1
 
             tool_defs = self.tools.get_definitions()
+            wire_messages = messages
+            if self.planning_memory_config.enabled:
+                self.planning_memory.refresh_working(messages, turn_start, self.run_id)
+                await self.planning_memory.maybe_update(run_id=self.run_id)
+                self.planning_memory.refresh_working(messages, turn_start, self.run_id)
+                wire_messages = self.planning_context.project(messages, turn_start)
+                self.planning_context.audit(wire_messages, messages, self.provider, self.model, tool_defs, iteration)
 
             self.last_run_info["iterations"] = iteration
             llm_started = time.perf_counter()
             self._emit("llm.started", {"iteration": iteration, "model": self.model})
             async def delta(text):
                 self._emit("assistant.delta", {"message_id": f"{self.run_id}:{iteration}", "text": text})
-            kwargs = dict(messages=messages, tools=tool_defs, model=self.model)
-            if self.stream_output:
-                response = await self.provider.chat_with_stream(on_delta=delta, **kwargs)
-            else:
-                response = await self.provider.chat_with_retry(**kwargs)
+            kwargs = dict(messages=wire_messages, tools=tool_defs, model=self.model)
+            from Emerge.providers.telemetry import usage_scope, workspace_sink
+            with usage_scope(workspace_sink(self.workspace, self._emit), scope='main',
+                             run_id=self.run_id, iteration=iteration):
+                if self.stream_output:
+                    response = await self.provider.chat_with_stream(on_delta=delta, **kwargs)
+                else:
+                    response = await self.provider.chat_with_retry(**kwargs)
             self.last_run_info["finish_reason"] = response.finish_reason
             for key, value in response.usage.items():
                 self.last_run_info["usage"][key] = self.last_run_info["usage"].get(key, 0) + value
+            actual_prompt = response.usage.get("prompt_tokens", 0)
+            if (self.planning_memory_config.enabled
+                    and actual_prompt > self.planning_memory_config.prompt_soft_budget_tokens):
+                self._emit("context.budget_warning", {"iteration": iteration,
+                           "actual_prompt_tokens": actual_prompt, "basis": "provider_usage",
+                           "soft_budget_tokens": self.planning_memory_config.prompt_soft_budget_tokens,
+                           "action": "continue"})
             self._emit("llm.completed", {"iteration": iteration, "usage": response.usage,
                                        "duration_ms": round((time.perf_counter() - llm_started) * 1000),
                                        "finish_reason": response.finish_reason})
@@ -296,6 +354,10 @@ class AgentLoop:
                     started = time.perf_counter()
                     self._emit("tool.started", {"tool_call_id": tool_call.id, "tool": tool_call.name,
                                                "arguments": tool_call.arguments})
+                    decision = self.context.reference_memory.record_decision(
+                        tool_call.name, tool_call.arguments, self.run_id)
+                    if decision:
+                        self._emit("memory.reference_decision", decision)
                     action_tool = self.tools.get("execute_robot_action")
                     if tool_call.name == "execute_robot_action" and action_tool:
                         action_tool.on_event = self._emit
@@ -304,11 +366,12 @@ class AgentLoop:
                     except asyncio.CancelledError:
                         self._emit("tool.cancelled", {"tool_call_id": tool_call.id, "tool": tool_call.name})
                         raise
-                    failed = isinstance(result, str) and result.startswith("Error")
+                    result_text = result.text if isinstance(result, SubagentToolResult) else str(result)
+                    failed = result_text.startswith("Error")
                     self._emit("tool.failed" if failed else "tool.completed",
                                {"tool_call_id": tool_call.id, "tool": tool_call.name,
                                 "duration_ms": round((time.perf_counter() - started) * 1000),
-                                "result": str(result)[:16000]})
+                                 "result": result_text[:16000]})
                     if tool_call.name == "update_plan" and not failed:
                         from Emerge.runtime.snapshots import plan_snapshot
                         self._emit("plan.updated", plan_snapshot(self.workspace))
@@ -338,6 +401,10 @@ class AgentLoop:
                 "without completing the task. You can try breaking the task into smaller steps."
             )
 
+        if self.planning_memory_config.enabled:
+            self.planning_memory.refresh_working(messages, turn_start, self.run_id)
+            await self.planning_memory.flush(run_id=self.run_id)
+            self.planning_memory.refresh_working(messages, turn_start, self.run_id)
         return final_content, tools_used, messages
 
     async def run(self) -> None:
@@ -362,9 +429,15 @@ class AgentLoop:
                     self._active_tasks.setdefault(msg.session_key, []).append(task)
                     task.add_done_callback(lambda t, k=msg.session_key: self._active_tasks.get(k, []) and self._active_tasks[k].remove(t) if t in self._active_tasks.get(k, []) else None)
         finally:
-            self._stop_visual_monitor()
+            await self._stop_visual_monitor()
 
     def _start_visual_monitor(self) -> bool:
+        for name in ("search_action_memory", "search_reference_memory", "delegate_subagent"):
+            search = self.tools.get(name)
+            if search is not None:
+                search.run_id = self.run_id
+        if self.visual_monitor is not None:
+            self.visual_monitor.run_id = self.run_id
         if self.visual_monitor is None or self.visual_monitor.is_running:
             return False
         self.visual_interrupts.bind()
@@ -374,9 +447,9 @@ class AgentLoop:
         )
         return True
 
-    def _stop_visual_monitor(self) -> None:
-        if self.visual_monitor is not None and self.visual_monitor.is_running:
-            self.visual_monitor.stop()
+    async def _stop_visual_monitor(self) -> None:
+        if self.visual_monitor is not None:
+            await self.visual_monitor.aclose()
 
     async def _handle_stop(self, msg: InboundMessage) -> None:
         """Cancel all active tasks for the session."""
@@ -445,11 +518,13 @@ class AgentLoop:
             logger.info("Processing system message from {}", msg.sender_id)
             key = f"{channel}:{chat_id}"
             session = self.sessions.get_or_create(key)
-            await self.memory_consolidator.maybe_consolidate_by_tokens(session)
+            if not self.planning_memory_config.enabled and not self.planning_memory.read_only:
+                await self.memory_consolidator.maybe_consolidate_by_tokens(session)
             history = session.get_history(max_messages=0)
             messages = self.context.build_messages(
                 history=history,
                 current_message=msg.content, channel=channel, chat_id=chat_id,
+                run_id=self.run_id,
             )
 
             async def _system_progress(content: str, *, tool_hint: bool = True) -> None:
@@ -472,7 +547,8 @@ class AgentLoop:
                     message_tool.set_progress_callback(None)
             self._save_turn(session, all_msgs, 1 + len(history))
             self.sessions.save(session)
-            await self.memory_consolidator.maybe_consolidate_by_tokens(session)
+            if not self.planning_memory_config.enabled and not self.planning_memory.read_only:
+                await self.memory_consolidator.maybe_consolidate_by_tokens(session)
             return OutboundMessage(channel=channel, chat_id=chat_id,
                                   content=final_content or "Background task completed.")
 
@@ -482,13 +558,15 @@ class AgentLoop:
         key = session_key or msg.session_key
         session = self.sessions.get_or_create(key)
 
-        await self.memory_consolidator.maybe_consolidate_by_tokens(session)
+        if not self.planning_memory_config.enabled and not self.planning_memory.read_only:
+            await self.memory_consolidator.maybe_consolidate_by_tokens(session)
 
         history = session.get_history(max_messages=0)
         initial_messages = self.context.build_messages(
             history=history,
             current_message=msg.content,
             channel=msg.channel, chat_id=msg.chat_id,
+            run_id=self.run_id,
         )
 
         async def _bus_progress(content: str, *, tool_hint: bool = True) -> None:
@@ -532,7 +610,8 @@ class AgentLoop:
 
         self._save_turn(session, all_msgs, 1 + len(history))
         self.sessions.save(session)
-        await self.memory_consolidator.maybe_consolidate_by_tokens(session)
+        if not self.planning_memory_config.enabled and not self.planning_memory.read_only:
+            await self.memory_consolidator.maybe_consolidate_by_tokens(session)
 
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
@@ -576,15 +655,12 @@ class AgentLoop:
     ) -> str:
         """Process a message directly (for CLI or programmatic usage)."""
         self.last_run_info = {"iterations": 0, "usage": {}, "finish_reason": "stop"}
-        started_monitor = self._start_visual_monitor()
+        self._start_visual_monitor()
         async def report(content, *, tool_hint=False):
             self._emit("agent.progress", {"text": content, "tool_hint": tool_hint})
             if on_progress:
                 await on_progress(content, tool_hint=tool_hint)
-        try:
-            msg = InboundMessage(channel=channel, sender_id="user", chat_id=chat_id, content=content)
-            response = await self._process_message(msg, session_key=session_key, on_progress=report)
-            return response.content if response else ""
-        finally:
-            if started_monitor:
-                self._stop_visual_monitor()
+        msg = InboundMessage(channel=channel, sender_id="user", chat_id=chat_id, content=content)
+        response = await self._process_message(msg, session_key=session_key, on_progress=report)
+        # Runtime stops physical actions before aclose drains the monitor's final evidence.
+        return response.content if response else ""

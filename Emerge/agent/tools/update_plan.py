@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import tempfile
 from datetime import datetime
@@ -12,11 +13,27 @@ from loguru import logger
 
 from Emerge.base import Tool
 
-
 _VALID_STATUSES = {"pending", "active", "done"}
 _UPDATE_KINDS = {"new_mission", "progress", "replan"}
 _RETRY_LIMIT = 3
 _BRANCH_DEPTH_LIMIT = 2
+ROUTE_EVENT_SCHEMA = {
+    "type": "string", "enum": ["landmark_reached", "exit_selected", "route_invalidated"],
+    "description": "Start a new segment on landmark arrival, a new exit choice or route invalidation; omit for local movement.",
+}
+ROUTE_COMPARISON_SCHEMA = {
+    "type": "object",
+    "description": "Retained visual comparison: evidence, current match, chosen exit and arrival cue.",
+    "properties": {
+        "evidence_ids": {"type": "array", "maxItems": 6,
+                         "items": {"type": "string", "pattern": "^E[0-9]+$"}},
+        "match": {"type": "string", "minLength": 1, "maxLength": 120},
+        "exit": {"type": "string", "minLength": 1, "maxLength": 120},
+        "arrival_cue": {"type": "string", "minLength": 1, "maxLength": 120},
+    },
+    "required": ["evidence_ids", "match", "exit", "arrival_cue"],
+    "additionalProperties": False,
+}
 
 
 class UpdatePlanTool(Tool):
@@ -45,6 +62,8 @@ class UpdatePlanTool(Tool):
             "changes without rewriting the main line, and 'replan' when intentionally "
             "rewriting the main line. "
             "Retries may never decrease for retained subgoals. Always pass the full desired state."
+            " Optional exploration records target, current_area, checked_routes, frontiers and "
+            "next_route for visual search; it survives progress/replan when omitted."
         )
 
     @property
@@ -122,6 +141,32 @@ class UpdatePlanTool(Tool):
                     "minLength": 1,
                     "description": "One-line explanation recorded with the timestamp.",
                 },
+                "exploration": {
+                    "type": "object",
+                    "description": (
+                        "Visual search memory. Supply all five fields to update, omit to retain "
+                        "during progress/replan, or pass {} to clear. New missions start empty. "
+                        "Use observed area/landmark descriptions, not world coordinates."
+                    ),
+                    "properties": {
+                        "target": {"type": "string"},
+                        "current_area": {"type": "string"},
+                        "checked_routes": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Area + route + looked-only/traversed/blocked + observation.",
+                        },
+                        "frontiers": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Visible open routes into areas not yet inspected or traversed.",
+                        },
+                        "next_route": {"type": "string"},
+                        "segment_event": ROUTE_EVENT_SCHEMA,
+                        "comparison": ROUTE_COMPARISON_SCHEMA,
+                    },
+                    "additionalProperties": False,
+                },
             },
             "required": [
                 "update_kind",
@@ -141,6 +186,7 @@ class UpdatePlanTool(Tool):
         pointer: int,
         branch_stack: list[dict[str, Any]],
         change_summary: str,
+        exploration: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> str:
         proposed = {
@@ -151,6 +197,7 @@ class UpdatePlanTool(Tool):
         }
 
         errors = self._validate_snapshot(proposed, update_kind, change_summary)
+        errors.extend(self._validate_exploration(exploration))
         if errors:
             return "Error: PLAN.md was not changed:\n- " + "\n- ".join(errors)
 
@@ -163,6 +210,17 @@ class UpdatePlanTool(Tool):
         )
         if transition_errors:
             return "Error: PLAN.md was not changed:\n- " + "\n- ".join(transition_errors)
+
+        # Explicit {} clears; omitted state survives normal updates and replans.
+        # New missions never inherit a previous target's negative observations.
+        remembered = (previous or {}).get("exploration") if update_kind != "new_mission" else None
+        if remembered and previous['pointer'] != pointer:
+            remembered = {**remembered, 'route_revision': remembered.get('route_revision', 0) + 1}
+            remembered.pop('comparison', None)
+            remembered.pop('segment_event', None)
+        search = self._merge_exploration(remembered, exploration)
+        if search:
+            proposed["exploration"] = search
 
         timestamp = self._clock().isoformat(timespec="seconds")
         content = self._render(
@@ -183,13 +241,75 @@ class UpdatePlanTool(Tool):
         )
 
         result = f"Successfully updated PLAN.md at {timestamp} ({update_kind})."
+        if search:
+            result += (f"\nExploration: {search['target']}; area={search['current_area']}; "
+                       f"checked_routes={len(search['checked_routes'])}; next={search['next_route']}.")
         if warnings:
-            result += (
-                "\n\nGUARDRAIL TRIGGERED — stop blind retries. Replan or report that "
-                "intervention is needed:\n- "
-                + "\n- ".join(warnings)
-            )
+            result += ("\n\nGUARDRAIL TRIGGERED — stop blind retries. Replan or report that "
+                       "intervention is needed:\n- " + "\n- ".join(warnings))
         return result
+
+    @classmethod
+    def _validate_exploration(cls, state: Any) -> list[str]:
+        if state is None or state == {}:
+            return []
+        fields = {"target", "current_area", "checked_routes", "frontiers", "next_route"}
+        optional = {"route_revision", "segment_event", "comparison"}
+        if not isinstance(state, dict) or not fields <= set(state) or set(state) - fields - optional:
+            return ["exploration must be {} or an object with " + ", ".join(sorted(fields))]
+        errors = []
+        for key in ("target", "current_area", "next_route"):
+            errors.extend(cls._validate_one_line(state[key], f"exploration.{key}"))
+        for key in ("checked_routes", "frontiers"):
+            values = state[key]
+            if not isinstance(values, list):
+                errors.append(f"exploration.{key} must be an array of strings")
+                continue
+            for index, value in enumerate(values):
+                errors.extend(cls._validate_one_line(value, f"exploration.{key}[{index}]"))
+        if 'route_revision' in state and (type(state['route_revision']) is not int or state['route_revision'] < 0):
+            errors.append('exploration.route_revision must be a nonnegative integer')
+        errors.extend(cls._validate_route_memory(state.get('segment_event'), state.get('comparison')))
+        return errors
+
+    @classmethod
+    def _validate_route_memory(cls, segment_event=None, comparison=None):
+        errors = []
+        if segment_event is not None and segment_event not in ROUTE_EVENT_SCHEMA['enum']:
+            errors.append('Unknown route segment_event')
+        if comparison is not None:
+            fields = set(ROUTE_COMPARISON_SCHEMA['required'])
+            if not isinstance(comparison, dict) or set(comparison) != fields:
+                return errors + ['comparison requires evidence_ids, match, exit and arrival_cue']
+            labels = comparison['evidence_ids']
+            if (not isinstance(labels, list) or len(labels) > 6 or
+                    any(not isinstance(label, str) or not re.fullmatch(r'E[0-9]+', label) for label in labels)):
+                errors.append('comparison.evidence_ids must contain at most six E labels')
+            for key in ('match', 'exit', 'arrival_cue'):
+                value = comparison[key]
+                errors.extend(cls._validate_one_line(value, f'comparison.{key}'))
+                if isinstance(value, str) and (not value.strip() or len(value) > 120):
+                    errors.append(f'comparison.{key} must contain 1–120 characters')
+        return errors
+
+    @staticmethod
+    def _merge_exploration(previous, incoming):
+        if incoming is None:
+            return previous
+        if not incoming:
+            return {}
+        merged = dict(incoming)
+        # Revision is runtime-owned; echoing a PLAN snapshot is a local update.
+        merged.pop('route_revision', None)
+        previous = previous or {}
+        for key in ('route_revision', 'comparison', 'segment_event'):
+            if key in previous and key not in merged:
+                merged[key] = previous[key]
+        if incoming.get('segment_event'):
+            merged['route_revision'] = previous.get('route_revision', 0) + 1
+            if 'comparison' not in incoming:
+                merged.pop('comparison', None)
+        return merged
 
     def _validate_snapshot(
         self,
@@ -488,12 +608,30 @@ class UpdatePlanTool(Tool):
                 }
             )
 
-        return {
+        snapshot = {
             "mission": mission_lines[0],
             "main_line": main_line,
             "pointer": int(pointer_match.group(1)),
             "branch_stack": branch_stack,
         }
+        search_match = re.search(
+            r"^## Exploration\s*$\n(.*?)(?=^## |\Z)", content,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        if search_match:
+            block = search_match.group(1).strip()
+            if not block.startswith("```json\n") or not block.endswith("```"):
+                raise ValueError("Exploration must contain a JSON block")
+            try:
+                search = json.loads(block[len("```json\n"):-3])
+            except ValueError as exc:
+                raise ValueError("invalid Exploration JSON") from exc
+            errors = cls._validate_exploration(search)
+            if errors or search is None:
+                raise ValueError("invalid Exploration fields: " + "; ".join(errors))
+            if search:
+                snapshot["exploration"] = search
+        return snapshot
 
     @staticmethod
     def _render(
@@ -537,6 +675,10 @@ class UpdatePlanTool(Tool):
         else:
             lines.append("- (empty)")
 
+        if snapshot.get("exploration"):
+            lines.extend(["", "## Exploration", "", "```json",
+                          json.dumps(snapshot["exploration"], ensure_ascii=False, indent=2), "```"])
+
         lines.extend(
             [
                 "",
@@ -570,6 +712,34 @@ class UpdatePlanTool(Tool):
                 temp_path = Path(temp_name)
                 if temp_path.exists():
                     temp_path.unlink()
+
+    def advance_route(self, current_area: str, next_route: str, *, segment_event=None, comparison=None) -> str:
+        """Persist a visual route decision alongside an action, without another LLM turn."""
+        state, error = self._load_previous()
+        if state is None:
+            raise ValueError(error or 'Establish PLAN before updating a route segment')
+        errors = self._validate_route_memory(segment_event, comparison)
+        if errors:
+            raise ValueError('; '.join(errors))
+        for key, value in [('current_area', current_area), ('next_route', next_route)]:
+            errors = self._validate_one_line(value, key)
+            if errors or len(value) > 400:
+                raise ValueError('; '.join(errors) or f'{key} exceeds 400 characters')
+        if not state.get('exploration'):
+            index = min(state['pointer'] - 1, len(state['main_line']) - 1)
+            state['exploration'] = {'target': state['main_line'][index]['subgoal'],
+                                    'checked_routes': [], 'frontiers': []}
+        incoming = {**{k: v for k, v in state['exploration'].items()
+                      if k not in ('route_revision', 'segment_event', 'comparison')},
+                    'current_area': current_area, 'next_route': next_route}
+        if segment_event is not None:
+            incoming['segment_event'] = segment_event
+        if comparison is not None:
+            incoming['comparison'] = comparison
+        state['exploration'] = self._merge_exploration(state['exploration'], incoming)
+        self._atomic_write(self._render(state, self._clock().isoformat(timespec='seconds'),
+                                       'progress', 'Route segment: ' + next_route))
+        return next_route
 
     @staticmethod
     def _guardrail_warnings(snapshot: dict[str, Any]) -> list[str]:

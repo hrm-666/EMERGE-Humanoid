@@ -2,9 +2,7 @@
 
 from pathlib import Path
 
-from pydantic import BaseModel
-from pydantic import ConfigDict
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
@@ -13,6 +11,20 @@ class Base(BaseModel):
     """Base model that accepts both camelCase and snake_case keys."""
 
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+
+class PlanningMemoryConfig(Base):
+    """Compact planning inputs; budgets warn and never stop robot tasks."""
+
+    enabled: bool = True
+    read_only: bool = False
+    update_actions: int = Field(default=12, ge=3)
+    minimum_interval_seconds: float = Field(default=60, ge=0)
+    update_timeout_seconds: float = Field(default=60, gt=0)
+    recent_tool_groups: int = Field(default=2, ge=1)
+    tool_result_chars: int = Field(default=2400, ge=500)
+    memory_budget_tokens: int = Field(default=4000, ge=500)
+    prompt_soft_budget_tokens: int = Field(default=24000, ge=1000)
 
 
 class AgentDefaults(Base):
@@ -27,6 +39,7 @@ class AgentDefaults(Base):
     context_window_tokens: int = 65_536
     temperature: float = 0.1
     max_tool_iterations: int = 40
+    planning_memory: PlanningMemoryConfig = Field(default_factory=PlanningMemoryConfig)
     # Deprecated compatibility field: accepted from old configs but ignored at runtime.
     memory_window: int | None = Field(default=None, exclude=True)
     reasoning_effort: str | None = None  # low / medium / high — enables LLM thinking mode
@@ -73,6 +86,10 @@ class VisualMonitorConfig(Base):
     poll_interval_seconds: float = Field(default=0.5, gt=0.0)
     verification_timeout_seconds: float = Field(default=30.0, gt=0.0)
     confirmations: int = Field(default=1, ge=1)
+    record_only: bool = False  # Capture action evidence without visual interrupt decisions.
+    capture_interval_seconds: float = Field(default=0.1, gt=0.0)
+    sample_every_n_frames: int = Field(default=3, ge=1)
+    buffer_max_frames: int = Field(default=24, ge=4)
 
 
 class RunRecordingConfig(Base):

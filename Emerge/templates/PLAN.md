@@ -19,3 +19,9 @@ current: 1
 ## Branch Stack
 
 - (empty)
+
+## Exploration
+
+```json
+{}
+```

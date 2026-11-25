@@ -39,7 +39,7 @@ class OpenAICodexProvider(LLMProvider):
         tool_choice: str | dict[str, Any] | None = None,
     ) -> LLMResponse:
         model = model or self.default_model
-        system_prompt, input_items = _convert_messages(messages)
+        system_prompt, input_items = _convert_messages(self._sanitize_empty_content(messages))
 
         token = await asyncio.to_thread(get_codex_token)
         headers = _build_headers(token.account_id, token.access)

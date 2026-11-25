@@ -68,3 +68,12 @@ For "open the drawer and put the bowl inside", a coarse Main Line may be:
 4. **Place the bowl inside** — Active Target: bowl and drawer interior; Intended Change: the bowl remains inside the drawer. VLA may perform the fine placement; a functionally adequate placement is sufficient.
 
 The action examples are selected only when each phase becomes active; they are not a fixed action script embedded in the Main Line.
+
+
+## Route evidence memory
+
+Use the compact memory summaries to select relevant historical evidence. Keep the
+current route in PLAN.exploration.next_route. When comparing a historical view, save
+evidence_ids, match, exit and arrival_cue in exploration.comparison (or the action's
+route_progress). Local adjustments retain this conclusion; landmark arrival, a new
+exit choice or route invalidation advances the segment via segment_event.

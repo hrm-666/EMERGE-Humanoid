@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
@@ -102,6 +103,38 @@ class LLMProvider(ABC):
         self.generation: GenerationSettings = GenerationSettings()
 
     @staticmethod
+    def _prepare_tool_images(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Attach tool images after all tool replies, as legacy APIs require.
+
+        Keep the stored multimodal tool results intact. Moving image blocks only
+        on the wire also keeps parallel tool-call replies adjacent to their call.
+        """
+        prepared: list[dict[str, Any]] = []
+        pending_images: list[dict[str, Any]] = []
+        for message in messages:
+            if message.get("role") != "tool" and pending_images:
+                prepared.append({"role": "user", "content": pending_images})
+                pending_images = []
+            content = message.get("content")
+            if message.get("role") == "tool" and isinstance(content, list):
+                images = [part for part in content
+                          if isinstance(part, dict) and part.get("type") == "image_url"]
+                if images:
+                    text = "\n".join(part.get("text", "") for part in content
+                                     if isinstance(part, dict) and part.get("type") == "text")
+                    prepared.append({**message, "content": text or "Image attached below."})
+                    pending_images.extend([
+                        {"type": "text", "text": f"Images from tool {message.get('name', '')} "
+                         f"(call {message.get('tool_call_id', '')}):\n{text}"},
+                        *images,
+                    ])
+                    continue
+            prepared.append(message)
+        if pending_images:
+            prepared.append({"role": "user", "content": pending_images})
+        return prepared
+
+    @staticmethod
     def _sanitize_empty_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Replace empty text content that causes provider 400 errors.
 
@@ -109,7 +142,7 @@ class LLMProvider(ABC):
         empty-string content or empty text blocks in list content.
         """
         result: list[dict[str, Any]] = []
-        for msg in messages:
+        for msg in LLMProvider._prepare_tool_images(messages):
             content = msg.get("content")
 
             if isinstance(content, str) and not content:
@@ -219,61 +252,37 @@ class LLMProvider(ABC):
         if reasoning_effort is self._SENTINEL:
             reasoning_effort = self.generation.reasoning_effort
 
-        for attempt, delay in enumerate(self._CHAT_RETRY_DELAYS, start=1):
+        from Emerge.providers.streaming import text_sink
+        from Emerge.providers.telemetry import record_attempt, start_call
+
+        call = start_call(model or self.get_default_model())
+        delays = (*self._CHAT_RETRY_DELAYS, None)
+        for attempt, delay in enumerate(delays, start=1):
+            started = time.perf_counter()
+            error_type = None
             try:
                 response = await self.chat(
-                    messages=messages,
-                    tools=tools,
-                    model=model,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    reasoning_effort=reasoning_effort,
+                    messages=messages, tools=tools, model=model, max_tokens=max_tokens,
+                    temperature=temperature, reasoning_effort=reasoning_effort,
                     tool_choice=tool_choice,
                 )
             except asyncio.CancelledError:
+                record_attempt(call, attempt=attempt, elapsed_s=time.perf_counter()-started,
+                               error_type='CancelledError')
                 raise
             except Exception as exc:
-                response = LLMResponse(
-                    content=f"Error calling LLM: {exc}",
-                    finish_reason="error",
-                )
-
-            if response.finish_reason != "error":
-                return response
-            from Emerge.providers.streaming import text_sink
+                error_type = type(exc).__name__
+                response = LLMResponse(content=f"Error calling LLM: {exc}", finish_reason="error")
             sink = text_sink.get()
-            if sink is not None and sink.delivered:
-                return response  # Never replay a partially displayed model response.
-            if not self._is_transient_error(response.content):
+            retry = (delay is not None and response.finish_reason == 'error'
+                     and self._is_transient_error(response.content)
+                     and not (sink is not None and sink.delivered))
+            record_attempt(call, attempt=attempt, elapsed_s=time.perf_counter()-started,
+                           response=response, error_type=error_type, retry=retry)
+            if not retry:
                 return response
-
-            err = (response.content or "").lower()
-            logger.warning(
-                "LLM transient error (attempt {}/{}), retrying in {}s: {}",
-                attempt,
-                len(self._CHAT_RETRY_DELAYS),
-                delay,
-                err[:120],
-            )
+            logger.warning("LLM transient error (attempt {}), retrying in {}s", attempt, delay)
             await asyncio.sleep(delay)
-
-        try:
-            return await self.chat(
-                messages=messages,
-                tools=tools,
-                model=model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                reasoning_effort=reasoning_effort,
-                tool_choice=tool_choice,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            return LLMResponse(
-                content=f"Error calling LLM: {exc}",
-                finish_reason="error",
-            )
 
     async def chat_with_stream(self, *, on_delta, **kwargs) -> LLMResponse:
         """Stream when the backend supports it; otherwise return a full response."""
