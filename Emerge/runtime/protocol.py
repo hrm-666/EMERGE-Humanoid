@@ -27,6 +27,7 @@ class RunRequest(Contract):
     model: str | None = None
     restrict_to_workspace: bool | None = None
     visual_monitor_enabled: bool | None = None
+    object_location_backend: Literal["auto", "vggt", "rgbd"] | None = None
     max_iterations: int | None = Field(default=None, ge=1)
     timeout_s: float | None = Field(default=None, gt=0)
     cancel_timeout_s: float = Field(default=10, gt=0, le=60)

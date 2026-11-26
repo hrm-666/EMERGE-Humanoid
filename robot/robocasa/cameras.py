@@ -10,10 +10,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+import logging
 import numpy as np
 
 from robot.mujoco_simulation.camera_injector import CameraInjector
 from robot.mujoco_simulation.vggt_camera_rig import VggtCameraRig
+
+
+logger = logging.getLogger(__name__)
 
 
 # Named (azimuth, elevation) angles; legacy names retain their original poses.
@@ -301,15 +305,61 @@ class RoboCasaCameraManager:
             if not config.depth and native is not None and native.shape[:2] == (height, width):
                 rgb = native.copy(order="C")
             else:
-                rendered = sim.render(
-                    camera_name=config.name, width=width, height=height, depth=config.depth
-                )
                 if config.depth:
                     from robosuite.utils.camera_utils import get_real_depth_map
 
-                    rendered, depth_buffer = rendered
-                    depth = get_real_depth_map(sim, depth_buffer[::-1]).astype(np.float32)
+                    # EGL depth readback occasionally returns uninitialized
+                    # memory (huge +/-1e38 values or NaN) on some drivers.
+                    # Re-render instead of accepting garbage; only sanitize if
+                    # every attempt fails.
+                    raw = None
+                    for attempt in range(3):
+                        rendered, depth_buffer = sim.render(
+                            camera_name=config.name, width=width, height=height, depth=True
+                        )
+                        candidate = np.asarray(depth_buffer[::-1], dtype=np.float32)
+                        bad = (
+                            (~np.isfinite(candidate)).any()
+                            or candidate.min() < -1e-3
+                            or candidate.max() > 1.0 + 1e-3
+                        )
+                        if not bad:
+                            raw = candidate
+                            break
+                        raw = candidate
+                        global _DEPTH_BAD_LOGS
+                        _DEPTH_BAD_LOGS = globals().get("_DEPTH_BAD_LOGS", 0) + 1
+                        if _DEPTH_BAD_LOGS <= 20:
+                            finite = candidate[np.isfinite(candidate)]
+                            logger.warning(
+                                "bad depth readback for %s attempt %d: "
+                                "bad=%.4f nan=%d min=%s max=%s",
+                                config.name, attempt + 1,
+                                float((~np.isfinite(candidate)).mean()),
+                                int((~np.isfinite(candidate)).sum()),
+                                f"{finite.min():.5f}" if finite.size else "nan",
+                                f"{finite.max():.5f}" if finite.size else "nan",
+                            )
+                    buffer = np.nan_to_num(raw, nan=1.0, posinf=1.0, neginf=0.0)
+                    buffer = np.clip(buffer, 0.0, 1.0)
+                    depth = get_real_depth_map(sim, buffer).astype(np.float32)
+                else:
+                    rendered = sim.render(
+                        camera_name=config.name, width=width, height=height, depth=False
+                    )
                 rgb = rendered[::-1].copy(order="C")
+            rgb_grad = float(
+                np.abs(np.diff(rgb.astype(np.int16), axis=0)).mean()
+                + np.abs(np.diff(rgb.astype(np.int16), axis=1)).mean()
+            )
+            if rgb_grad > 60.0:
+                global _RGB_BAD_LOGS
+                _RGB_BAD_LOGS = globals().get("_RGB_BAD_LOGS", 0) + 1
+                if _RGB_BAD_LOGS <= 30:
+                    logger.warning(
+                        "bad rgb readback for %s (depth=%s): grad=%.1f",
+                        config.name, bool(config.depth), rgb_grad,
+                    )
             fovy = float(sim.model.cam_fovy[camera_id])
             focal = 0.5 * height / np.tan(np.deg2rad(fovy) / 2.0)
             intrinsics = np.array(

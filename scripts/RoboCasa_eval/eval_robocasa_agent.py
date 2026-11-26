@@ -79,6 +79,9 @@ def prepare_episode(args: argparse.Namespace, directory: Path) -> Path:
     workspace = directory / "workspace"
     # The CLI workspace must be the sole workspace used by controller/agent.
     config.pop("workspace", None)
+    # Archived RGB-D driver configs carry this legacy flag set to false.
+    if config.pop("publish_oracle_targets", False):
+        raise ValueError("Oracle target publication is no longer supported")
     config["robocasa"].update(env_name=args.env_name, split=args.split, seed=args.seed)
     config.setdefault("vla", {})["stop_on_success"] = True
     if getattr(args, "policy_backend", None):
@@ -141,6 +144,7 @@ def start_agent(args: argparse.Namespace, directory: Path, workspace: Path,
     request = RunRequest(
         message=message, workspace=str(workspace), config=str(args.agent_config),
         session_id=session_id, restrict_to_workspace=True, stream=False,
+        object_location_backend=getattr(args, "location_backend", None),
         timeout_s=max(.001, deadline-time.monotonic()),
         max_iterations=args.max_agent_iterations,
     )
@@ -309,6 +313,7 @@ class EpisodeSupervisor:
             "episode_key": f"{args.split}/{args.env_name}/seed_{args.seed}",
             "env_name": args.env_name, "split": args.split, "seed": args.seed,
             "instruction": instruction,
+            "location_backend": getattr(args, "location_backend", None),
             "success": bool(status.get("success", False)),
             "termination_reason": reason,
             "action_steps": int(status.get("action_steps", 0)),
@@ -355,6 +360,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=nonnegative_int, default=7)
     parser.add_argument("--driver-config", type=Path, default=REPO_ROOT / "dev/robocasa_driver.json")
     parser.add_argument("--agent-config", type=Path, default=REPO_ROOT / ".emerge/config.json")
+    parser.add_argument("--location-backend", choices=("auto", "rgbd", "vggt"),
+                        help="Override only the object_location backend")
     parser.add_argument("--controller-python", "--watchdog-python", default=os.environ.get("ROBOCASA_PYTHON", sys.executable))
     parser.add_argument("--agent-python", default=sys.executable)
     parser.add_argument("--policy-backend", choices=("openpi", "rldx"), help="Override the driver's VLA backend")
@@ -380,9 +387,10 @@ def main(argv: list[str] | None = None) -> int:
     # Validate the existing API config without copying or changing it.
     from Emerge.config.loader import load_config
     try:
-        load_config(args.agent_config)
+        config = load_config(args.agent_config)
     except ValueError as exc:
         parser.error(str(exc))
+    args.location_backend = args.location_backend or config.subagents.object_location.geometry_backend
     directory = (args.output_dir.expanduser().resolve() if args.output_dir else
                  REPO_ROOT / "artifacts/robocasa_agent_eval" / args.env_name /
                  (datetime.now().strftime("%Y%m%dT%H%M%S")+"_"+uuid4().hex[:8]))

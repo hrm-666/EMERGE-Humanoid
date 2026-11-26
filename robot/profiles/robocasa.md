@@ -88,11 +88,19 @@ unfinished phases from the current state.
 
 ### CloseBlenderLid (task: "Close the lid blender by securely placing the lid on top.")
 
-- Measured attach approach, then one continuous VLA phase through grasp, transfer,
-  alignment, and release.
-- Release only when fresh views show the lid centered, level, and at rim height;
-  retract vertically, then clear laterally by >0.15 m. If off-center or VLA stalls,
-  re-localize and change the grasp/placement; never guess a high-edge target from a bbox.
+- Use a measured attach approach and VLA to grasp and seat the lid. Once it is
+  centered and level on the rim, open in place with `set_gripper`.
+- Adjust the release pose first if a fingertip is visibly caught. If the lid is
+  seated and the fingertips are clear or obscured, try one 1 cm `move_linear`
+  along a clear direction with the gripper open, the current wrist orientation,
+  and `position_tolerance_m: 0.002`.
+- Save a side view before the probe and compare the same view afterward. Nudge
+  or retreat only if the fingertips are visibly clear and the lid stayed put.
+  Verify again if unclear. If the lid is off-center on the rim, use `move_linear`
+  to nudge it horizontally inward from the overhanging side by 5–10 mm
+  (`position_tolerance_m: 0.002`). Recheck and continue only if it improves.
+  Once flush, keep the gripper open, retreat diagonally up and toward the robot
+  along a clear path, and check success once >0.15 m from the lid.
 
 ### CoffeeSetupMug (task: "Pick the mug from the counter and place it under the coffee machine dispenser.")
 

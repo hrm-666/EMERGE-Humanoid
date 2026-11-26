@@ -43,6 +43,7 @@ class RoboCasaActionResult:
 
 @dataclass
 class _Progress:
+    position_tolerance_m: float
     steps: int = 0
     dirty: bool = False
     stage: str = "request_validation"
@@ -105,11 +106,12 @@ class RoboCasaActionController:
         """
         if action_type == "vla_execute":
             return self._vla_execute(params, cancel_check)
-        progress = _Progress()
+        progress = _Progress(position_tolerance_m=self.config["position_tolerance_m"])
         completed, reason, message, error_stage = False, "error", None, None
         observation_error = None
         try:
             request = self._request(action_type, params)
+            progress.position_tolerance_m = request.get("position_tolerance_m", progress.position_tolerance_m)
             progress.stage = "environment_state"
             state = self._environment.get_robot_state()
             progress.terminated = bool(state["terminated"])
@@ -244,6 +246,11 @@ class RoboCasaActionController:
         request["orientation_requested"] = action_type == "move_to_pose" or request["orientation"] is not None
         if action_type == "move_linear":
             request["settle_steps"] = max(0, int(self.config["settle_steps"]))
+            if "position_tolerance_m" in params:
+                tolerance = params["position_tolerance_m"]
+                if type(tolerance) not in (int, float) or not np.isfinite(tolerance) or tolerance <= 0:
+                    raise ValueError("move_linear position_tolerance_m must be a positive finite number")
+                request["position_tolerance_m"] = float(tolerance)
         return request
 
     def _move_base(
@@ -366,7 +373,7 @@ class RoboCasaActionController:
 
     def _converged(self, target: np.ndarray, quaternion: np.ndarray, progress: _Progress) -> bool:
         self._measure(target, quaternion, progress)
-        if progress.position_error > self.config["position_tolerance_m"]:
+        if progress.position_error > progress.position_tolerance_m:
             return False
         return (
             not progress.orientation_requested
@@ -383,13 +390,15 @@ class RoboCasaActionController:
         """
         self._measure(target, quaternion, progress)
         error = progress.position_error
-        if error < progress.best_position_error - self._NO_PROGRESS_EPSILON_M:
+        # Small, interpolated moves can make useful progress in fractions of a millimetre.
+        progress_epsilon = min(self._NO_PROGRESS_EPSILON_M, progress.position_tolerance_m / 10)
+        if error < progress.best_position_error - progress_epsilon:
             progress.best_position_error = error
             progress.stall_steps = 0
         else:
             progress.stall_steps += 1
         if (progress.stall_steps >= self._NO_PROGRESS_STEPS
-                and error > self.config["position_tolerance_m"]):
+                and error > progress.position_tolerance_m):
             progress.stalled = True
 
     def _servo(

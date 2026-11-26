@@ -78,6 +78,12 @@ class RoboCasaPolicyExecutor:
         self.backend = self.config.get("backend", "openpi")
         if self.backend not in {"openpi", "rldx"}:
             raise ValueError(f"Unsupported RoboCasa VLA backend: {self.backend!r}")
+        if self.backend == "rldx":
+            # Importing torch (CUDA driver init) after MuJoCo has created its
+            # EGL context corrupts subsequent GL readbacks on some drivers.
+            # The executor is built before the simulator scene is created, so
+            # import the client's heavy dependencies here, up front.
+            import torch  # noqa: F401
         self.resize_size = int(self.config.get("resize_size", 224))
         self.replan_steps = max(1, int(self.config.get("replan_steps", 5)))
         self.publish_every_n_steps = max(1, int(self.config.get("publish_every_n_steps", self.replan_steps)))

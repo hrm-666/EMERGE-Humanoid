@@ -55,7 +55,7 @@ python -B scripts/RoboCasa_eval/eval_robocasa_agent.py \
 5. 监督环境状态。主 agent 正常提前返回、任务仍未完成时，最多进行两轮同 session 的继续反馈。每轮使用独立 run_id，共享最初的执行截止时间。
 6. 成功、预算耗尽、超时、异常或收到中断后，先停止主 agent，让它通过仍在运行的 Controller 取消未完成动作，再清理 Controller，关闭视频编码器，最后保存结果。
 
-RoboCasa 保留 `gym.make(seed=...)` 及既有 reset 流程，不引入 LIBERO 的 BDDL、初始状态数组或额外 settling 动作。默认 driver 配置将整局动作预算设为 **2400 步**，就绪后的执行超时为 **2000 秒（33 分 20 秒）**。预算参考本地 RPent `pilot_none` 原子任务成功案例：最大动作消耗约 2319 步（由逐步录制帧数加未录制的机械臂校准步数重建），最长耗时 1975.4 秒。
+RoboCasa 创建环境时使用 `gym.make(seed=...)`，正式开局时再次显式调用 `reset(seed=...)`，与 RLDX 纯策略评测对齐场景采样的起点。默认 driver 配置将整局动作预算设为 **2400 步**，就绪后的执行超时为 **2000 秒（33 分 20 秒）**。预算参考本地 RPent `pilot_none` 原子任务成功案例：最大动作消耗约 2319 步（由逐步录制帧数加未录制的机械臂校准步数重建），最长耗时 1975.4 秒。
 
 VLA、几何动作及其保持步数共享整局动作预算；续跑共享最初的执行截止时间。官方成功、步数耗尽或超时都会结束评测。`--max-steps` 优先于 driver 配置；自定义 driver 未配置 `evaluation.max_action_steps` 且未传 `--max-steps` 时，仍由原生任务 registry 解析预算。这组放宽后的预算应与原生 horizon 下的历史成绩分开比较。
 
@@ -65,6 +65,7 @@ VLA、几何动作及其保持步数共享整局动作预算；续跑共享最�
 | --- | --- |
 | `--env-name` | 必填，原生 RoboCasa 任务类名 |
 | `--split` / `--seed` | 默认 `target` / `7` |
+| `--location-backend` | 可选 `rgbd`、`vggt` 或 `auto`。省略时使用 Agent 配置中的定位后端。 |
 | `--record-video` / `--no-record-video` | 默认录制 `rollout.mp4`；诊断时可以显式关闭 |
 | `--max-steps` | 覆盖整个 episode 的控制步数预算；默认 driver 配置为 2400 步 |
 | `--max-agent-iterations` | 覆盖每轮主 agent 的工具迭代上限；默认使用 API 配置中的值 |

@@ -15,15 +15,21 @@ def main():
 
     os.environ.setdefault("RLDX_ATTN_IMPL", "sdpa")
     os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
+    import inspect
+
     from rldx.data.embodiment_tags import EmbodimentTag
     from rldx.policy.rldx_policy import RLDXPolicy, RLDXSimPolicyWrapper
     from rldx.policy.server_client import PolicyServer
 
-    policy = RLDXSimPolicyWrapper(RLDXPolicy(
+    policy_kwargs = dict(
         embodiment_tag=EmbodimentTag.GENERAL_EMBODIMENT,
         model_path=args.model_path, device=args.device,
-        backbone_revision=args.backbone_revision,
-    ))
+    )
+    # Older RLDX builds accept backbone_revision; RLDX-1 v1.0.2 resolves the
+    # backbone from the checkpoint config instead, so only pass it when supported.
+    if "backbone_revision" in inspect.signature(RLDXPolicy.__init__).parameters:
+        policy_kwargs["backbone_revision"] = args.backbone_revision
+    policy = RLDXSimPolicyWrapper(RLDXPolicy(**policy_kwargs))
     # The installed RC365 checkpoint omits image_max_area. Restore the
     # processor's documented geometry defaults before its first inference.
     processor = policy.policy.processor

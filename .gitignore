@@ -28,6 +28,7 @@ artifacts/
 outputs/
 logs/
 *.log
+/MUJOCO_LOG.TXT
 *.safetensors
 *.ckpt
 *.pth

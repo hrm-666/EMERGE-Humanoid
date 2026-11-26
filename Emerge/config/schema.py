@@ -23,7 +23,7 @@ class AgentDefaults(Base):
     max_tokens: int = Field(default=8192, gt=0)
     context_window_tokens: int = 65_536
     temperature: float | None = Field(default=None, ge=0, le=2)
-    max_tool_iterations: int = 40
+    max_tool_iterations: int = 80
     # Deprecated compatibility field: accepted from old configs but ignored at runtime.
     memory_window: int | None = Field(default=None, exclude=True)
     reasoning_effort: str | None = None  # Provider-specific reasoning effort, e.g. low / medium / high.

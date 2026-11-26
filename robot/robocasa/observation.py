@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 
@@ -11,6 +13,14 @@ import numpy as np
 
 from Emerge.runtime.storage import atomic_json
 from robot.robocasa.cameras import RoboCasaCameraFrame
+
+
+def _encode_png(rgb: np.ndarray) -> bytes:
+    from PIL import Image
+
+    with BytesIO() as buffer:
+        Image.fromarray(rgb).save(buffer, format="PNG", compress_level=1)
+        return buffer.getvalue()
 
 
 class RoboCasaObservationWriter:
@@ -29,6 +39,7 @@ class RoboCasaObservationWriter:
         self._image_root = self.workspace / "artifacts/cameras/robocasa"
         self._episode_id = uuid4().hex
         self._revision = 0
+        self._png_workers: ThreadPoolExecutor | None = None
 
     def invalidate(self) -> None:
         self.manifest_path.unlink(missing_ok=True)
@@ -38,34 +49,42 @@ class RoboCasaObservationWriter:
         self.invalidate()
         self._episode_id = uuid4().hex
 
-    def write(self, frames: Mapping[str, RoboCasaCameraFrame]) -> Path:
-        from PIL import Image
+    def close(self) -> None:
+        """Release encoding threads while keeping the published observations."""
+        if self._png_workers is not None:
+            self._png_workers.shutdown()
+            self._png_workers = None
 
+    def write(self, frames: Mapping[str, RoboCasaCameraFrame]) -> Path:
         selected = [frames[name] for name in dict.fromkeys(
             self.camera_names + self.verification_camera_names
         )]
+        if self._png_workers is None:
+            self._png_workers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="robocasa-png")
+        # Encode the captured RGB frames before touching the published files.
+        encoded = list(self._png_workers.map(_encode_png, (frame.rgb for frame in selected)))
         self._image_root.mkdir(parents=True, exist_ok=True)
         views = {}
-        for index, frame in enumerate(selected):
+        for index, (frame, png) in enumerate(zip(selected, encoded, strict=True)):
             view = {
                 "name": frame.name, "width": frame.width, "height": frame.height,
                 "intrinsics": frame.intrinsics.tolist(),
                 "T_world_camera": frame.T_world_camera.tolist(),
             }
             # PNG and NPY share the same temporary-file replacement lifecycle.
-            for key, suffix, array in (
-                ("image_path", ".png", frame.rgb),
+            for key, suffix, data in (
+                ("image_path", ".png", png),
                 ("depth_path", "_depth.npy", frame.depth_m),
             ):
-                if array is None:
+                if data is None:
                     continue
                 path = self._image_root / f"{index:03d}{suffix}"
                 temporary = path.with_name(f".{path.stem}.{os.getpid()}.tmp{path.suffix}")
                 try:
                     if key == "image_path":
-                        Image.fromarray(array).save(temporary, format="PNG")
+                        temporary.write_bytes(data)
                     else:
-                        np.save(temporary, array, allow_pickle=False)
+                        np.save(temporary, data, allow_pickle=False)
                         view["depth_unit"] = "meter"
                     os.replace(temporary, path)
                 finally:

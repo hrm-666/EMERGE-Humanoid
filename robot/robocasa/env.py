@@ -10,7 +10,9 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import random
 from copy import deepcopy
+from functools import cache
 from pathlib import Path
 from typing import Any, Callable
 
@@ -24,11 +26,53 @@ logger = logging.getLogger(__name__)
 StepResult = tuple[dict[str, Any], float, bool, bool, dict[str, Any]]
 
 
+def _seed_global_rngs(seed: int) -> None:
+    """Match the native RLDX rollout's process-level seeding."""
+    random.seed(seed)
+    np.random.seed(seed % (2 ** 32))
+
+
+@cache
+def _protect_egl_cleanup() -> None:
+    """Keep robosuite's deferred cleanup in the context that owns its buffers."""
+    from robosuite.renderers.context.egl_context import EGL, EGLGLContext
+    from robosuite.utils.binding_utils import MjRenderContext
+
+    cleanup = MjRenderContext.__del__
+
+    def cleanup_in_owner(render_context: Any) -> None:
+        owner = getattr(render_context, "gl_ctx", None)
+        if not isinstance(owner, EGLGLContext) or not getattr(owner, "_context", None):
+            cleanup(render_context)
+            return
+
+        current = EGL.eglGetCurrentContext()
+        if current and current.address == owner._context.address:
+            cleanup(render_context)
+            return
+
+        # A hard reset can leave the old renderer in a reference cycle. When
+        # it is collected later, the new episode's context can already be active.
+        if current:
+            display = EGL.eglGetCurrentDisplay()
+            draw_surface = EGL.eglGetCurrentSurface(EGL.EGL_DRAW)
+            read_surface = EGL.eglGetCurrentSurface(EGL.EGL_READ)
+        owner.make_current()
+        try:
+            cleanup(render_context)
+        finally:
+            if current:
+                EGL.eglMakeCurrent(display, draw_surface, read_surface, current)
+
+    MjRenderContext.__del__ = cleanup_in_owner
+
+
 class RoboCasaEnvManager:
     """Own one PandaOmron Gym environment without benchmark stop policies.
 
-    Like OpenPI evaluation, create() calls gym.make(seed=...) then reset() once.
-    Gym construction also resets internally; no extra settling actions are added.
+    Use the configured seed for construction and for the first evaluated reset.
+    Gym construction also resets internally, consuming random numbers before
+    the first evaluated episode.
     """
 
     def __init__(
@@ -113,8 +157,12 @@ class RoboCasaEnvManager:
         # Rendering backends must be selected before importing MuJoCo/robosuite.
         os.environ.setdefault("MUJOCO_GL", self.mujoco_gl)
         importlib.import_module("robocasa")  # Registers robocasa/<task> with Gym.
+        if os.environ["MUJOCO_GL"].strip().lower() == "egl":
+            _protect_egl_cleanup()
         gym = importlib.import_module("gymnasium")
         env_utils = importlib.import_module("robocasa.utils.env_utils")
+        if self.seed is not None:
+            _seed_global_rngs(self.seed)
         self._environment = gym.make(
             f"robocasa/{self.env_name}",
             split=self.split,
@@ -126,7 +174,7 @@ class RoboCasaEnvManager:
             # Register before the existing explicit reset, which rebuilds the
             # model. This adds no resets or simulator steps to the native flow.
             self._camera_manager.install(self._environment)
-            self.reset()
+            self.reset(seed=self.seed)
         except BaseException:
             try:
                 self.close()
@@ -145,7 +193,9 @@ class RoboCasaEnvManager:
         if seed is None:
             obs, info = environment.reset()
         else:
-            obs, info = environment.reset(seed=int(seed))
+            seed = int(seed)
+            _seed_global_rngs(seed)
+            obs, info = environment.reset(seed=seed)
         self._store_result(obs, 0.0, False, False, info)
         # Establish the new episode's opening intent without extra settling steps.
         # This is a command default, not a claim that the fingers are fully open.
@@ -370,6 +420,8 @@ class RoboCasaEnvManager:
     def close(self) -> None:
         """Release resources, retaining the last published files for inspection."""
         environment, self._environment = self._environment, None
+        if self._observation_writer is not None:
+            self._observation_writer.close()
         self._camera_manager.close()
         self._convert_action = None
         self._action_steps = 0

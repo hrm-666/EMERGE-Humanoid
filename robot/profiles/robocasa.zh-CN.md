@@ -2,7 +2,7 @@
 
 <!--
 英文原文：robot/profiles/robocasa.md
-英文原文 SHA-256：fb2125396eb8587e6c5f52cc9cead11935834f976611ce42d793dc7930f273ef
+英文原文 SHA-256：8b18dede3f5b0f5443dfb8eecf2f1c53c6c0b3e55d8eac716dcd1b2058b1c7f3
 修改英文原文时，请同步修订本译文并更新上述摘要；修改译文时也应对照英文原文。
 运行时 Agent 默认使用英文原文；本文件供中文阅读。
 -->
@@ -80,10 +80,16 @@
 
 ### CloseBlenderLid（任务原文："Close the lid blender by securely placing the lid on top."）
 
-- 先用有测量依据的 attach 接近，再由一段连续 VLA 完成抓取、搬运、对齐和释放。
-- 只有最新观测确认盖子居中、水平且位于杯沿高度时才释放；先垂直撤离，再横向
-  撤到距盖子超过 0.15 米。若偏心或 VLA 不再改善，重新定位并改变抓取或放置
-  方式；不要根据包围盒猜测高边目标。
+- 用有测量依据的 attach 接近，由 VLA 抓取并放盖。盖子居中、水平地坐在杯沿上后，
+  用 `set_gripper` 原地开爪。
+- 如果看到指尖卡住，先调整释放姿态。盖子仍坐在杯沿上，且指尖已分离或被遮挡时，
+  保持开爪和当前腕部朝向，沿有空间的方向用 `move_linear` 试退 1 厘米一次，
+  传入 `position_tolerance_m: 0.002`。
+- 保存试退前的侧视图，试退后与同一视角对比。确认指尖已离开、盖子没跟动后，
+  才轻推或斜撤。看不清就先复核。若盖子在杯沿上偏心，用 `move_linear`
+  从凸出侧向内水平轻推 5–10 毫米（`position_tolerance_m: 0.002`）。推后复看，
+  有改善才继续。盖边平齐后保持开爪，沿畅通路径向上、朝机器人侧斜撤，距盖子超过
+  0.15 米后检查成功。
 
 ### CoffeeSetupMug（任务原文："Pick the mug from the counter and place it under the coffee machine dispenser."）
 

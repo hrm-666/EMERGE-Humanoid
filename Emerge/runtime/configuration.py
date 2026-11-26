@@ -15,4 +15,6 @@ def load_runtime_config(request: RunRequest) -> Config:
         config.tools.restrict_to_workspace = request.restrict_to_workspace
     if request.visual_monitor_enabled is not None:
         config.visual_monitor.enabled = request.visual_monitor_enabled
+    if request.object_location_backend is not None:
+        config.subagents.object_location.geometry_backend = request.object_location_backend
     return config
