@@ -47,12 +47,19 @@ EVALUATION_RULES = """## RoboCasa Evaluation Rules
 
 Complete the supplied task autonomously through execute_robot_action.
 Use the installed EMBODIED.md profile, planning tools and registered specialists.
-Inspect fresh ROBOT_STATE.md after each action; action completion is not task success.
+{post_action_state_rule}
 The official success signal is robots.robocasa.success. Visual judgments inform
 planning but do not replace that signal. Stop on official success, done=true,
 ready=false, or when no safe useful action remains. Never change state files
 to manufacture success. Do not inspect files or processes outside this workspace.
 """
+
+READ_POST_ACTION_STATE = "Inspect fresh ROBOT_STATE.md after each action; action completion is not task success."
+USE_POST_ACTION_STATE_SUMMARY = (
+    "After each action, use the `RoboCasa post-action state` in the tool result to check current robot state. "
+    "This published summary satisfies the post-action re-read instruction in EMBODIED.md and ROBOT_STATE.md. "
+    "Read ROBOT_STATE.md if the summary is missing or you need fields it omits."
+)
 
 
 class EpisodeError(Exception):
@@ -102,7 +109,12 @@ def prepare_episode(args: argparse.Namespace, directory: Path) -> Path:
     workspace.mkdir()
     sync_workspace_templates(workspace, silent=True)
     agents = workspace / "AGENTS.md"
-    atomic_text(agents, agents.read_text(encoding="utf-8").rstrip()+"\n\n"+EVALUATION_RULES)
+    state_rule = (
+        USE_POST_ACTION_STATE_SUMMARY if getattr(args, "action_state_summary", False)
+        else READ_POST_ACTION_STATE
+    )
+    rules = EVALUATION_RULES.format(post_action_state_rule=state_rule)
+    atomic_text(agents, agents.read_text(encoding="utf-8").rstrip()+"\n\n"+rules)
     state = default_robot_state_doc()
     state["task"] = dict(benchmark="RoboCasa", env_name=args.env_name, split=args.split, seed=args.seed)
     save_robot_state_doc(workspace / "ROBOT_STATE.md", state)
@@ -218,11 +230,12 @@ class EpisodeSupervisor:
             with (directory / "controller.log").open("w", encoding="utf-8") as controller_log, (directory / "agent.log").open("w", encoding="utf-8") as agent_log:
                 try:
                     phase = "environment_initialization"
-                    controller = start_process(
-                        [args.controller_python, "-B", "-m", "robot.controller", "--driver", "robocasa",
-                         "--workspace", str(workspace), "--driver-config", str(directory / "driver_config.json"),
-                         "--interval", str(args.poll_interval_s)], workspace, controller_log,
-                    )
+                    command = [args.controller_python, "-B", "-m", "robot.controller", "--driver", "robocasa",
+                               "--workspace", str(workspace), "--driver-config", str(directory / "driver_config.json"),
+                               "--interval", str(args.poll_interval_s)]
+                    if getattr(args, "action_state_summary", False):
+                        command.append("--robocasa-action-state-summary")
+                    controller = start_process(command, workspace, controller_log)
                     status = self.wait_ready(controller, directory, workspace)
                     instruction = status["metadata"]["instruction"]
                     print(f"READY {args.env_name} seed={args.seed} budget={status['max_action_steps']}", flush=True)
@@ -314,6 +327,7 @@ class EpisodeSupervisor:
             "env_name": args.env_name, "split": args.split, "seed": args.seed,
             "instruction": instruction,
             "location_backend": getattr(args, "location_backend", None),
+            "action_state_summary": getattr(args, "action_state_summary", False),
             "success": bool(status.get("success", False)),
             "termination_reason": reason,
             "action_steps": int(status.get("action_steps", 0)),
@@ -370,6 +384,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Save rollout.mp4 from the native left camera (enabled by default)")
     parser.add_argument("--max-steps", type=positive_int, help="Override the driver or native registry episode budget; all control actions share it")
     parser.add_argument("--max-agent-iterations", type=positive_int, help="Override iterations per headless run")
+    parser.add_argument("--action-state-summary", action="store_true",
+                        help="Include a fresh ROBOT_STATE.md summary in every completed RoboCasa action result")
     parser.add_argument("--max-agent-feedback-rounds", type=nonnegative_int, default=2)
     parser.add_argument("--episode-timeout-s", type=positive_float, default=2000., help="Execution timeout after readiness, shared by continuations (default: 2000 seconds)")
     parser.add_argument("--ready-timeout-s", type=positive_float, default=300.)

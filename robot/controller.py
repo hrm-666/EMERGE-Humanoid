@@ -57,7 +57,7 @@ def load_driver_config(path: Path | None) -> dict[str, object]:
     return data
 
 
-def _publish_runtime_state(driver: BaseDriver, path: Path) -> None:
+def _publish_runtime_state(driver: BaseDriver, path: Path) -> dict:
     existing = load_robot_state_doc(path)
     runtime_state = driver.get_runtime_state()
     updated = merge_robot_state_doc(
@@ -72,6 +72,19 @@ def _publish_runtime_state(driver: BaseDriver, path: Path) -> None:
         ),
     )
     save_robot_state_doc(path, updated)
+    return updated
+
+
+def _robocasa_action_state(state: dict) -> str:
+    robot = state["robots"].get("robocasa")
+    if not isinstance(robot, dict) or not {"ready", "success", "done", "action_steps"} <= robot.keys():
+        return ""
+    fields = (
+        "ready", "success", "done", "termination_reason", "action_steps", "remaining_steps",
+        "base_pose", "eef_pose_world", "eef_pose_relative", "gripper_qpos", "last_gripper_close",
+    )
+    summary = {field: robot[field] for field in fields if field in robot}
+    return "\n\nRoboCasa post-action state (from ROBOT_STATE.md):\n" + json.dumps(summary, ensure_ascii=False)
 
 
 def _install_profile(driver, workspace: Path) -> None:
@@ -106,11 +119,13 @@ def watch_loop(
     *,
     driver_kwargs: dict[str, object] | None = None,
     robot_state_file: Path | None = None,
+    robocasa_action_state_summary: bool = False,
 ) -> None:
     """Load a driver, install its profile, then poll ACTION.md forever."""
     from robot.drivers import load_driver
 
     robot_state_file = robot_state_file or (workspace / "ROBOT_STATE.md")
+    include_action_state = robocasa_action_state_summary and driver_name == "robocasa"
 
     _log(f"Workspace : {workspace}")
     _log(f"Driver    : {driver_name}")
@@ -137,13 +152,18 @@ def watch_loop(
         action_file = workspace / "ACTION.md"
         try:
             while True:
-                _poll_once(driver, action_file, robot_state_file)
+                _poll_once(
+                    driver, action_file, robot_state_file,
+                    robocasa_action_state_summary=include_action_state,
+                )
                 time.sleep(poll_interval)
         except KeyboardInterrupt:
             _log("Shutdown.")
 
 
-def _poll_once(driver, action_file: Path, robot_state_file: Path) -> None:
+def _poll_once(
+    driver, action_file: Path, robot_state_file: Path, *, robocasa_action_state_summary: bool = False,
+) -> None:
     """Single poll: publish runtime state, then execute pending ACTION.md."""
     _publish_runtime_state(driver, robot_state_file)
 
@@ -210,13 +230,17 @@ def _poll_once(driver, action_file: Path, robot_state_file: Path) -> None:
         result = f"Error: {type(exc).__name__}: {exc}"
     _log(f"Result: {result}")
 
-    _publish_runtime_state(driver, robot_state_file)
+    state = _publish_runtime_state(driver, robot_state_file)
     _log("ROBOT_STATE.md updated.")
+    # Keep status classification independent of the optional state text.
+    terminal_status = infer_terminal_status(result)
+    if robocasa_action_state_summary:
+        result += _robocasa_action_state(state)
 
     def finish(latest):
         for item in latest["actions"]:
             if item["id"] == action_id:
-                item.update(status=infer_terminal_status(result), result=result,
+                item.update(status=terminal_status, result=result,
                             finished_at=action_timestamp(),
                             duration_ms=round((time.monotonic() - started) * 1000))
                 if item.get("cancel_requested"):
@@ -250,6 +274,8 @@ def main() -> None:
         default=None,
         help="Path to a JSON object file that will be passed through to the selected driver as keyword args.",
     )
+    parser.add_argument("--robocasa-action-state-summary", action="store_true",
+                        help="Append the published RoboCasa robot state summary to action results")
     args = parser.parse_args()
 
     workspace = Path(args.workspace).expanduser().resolve() if args.workspace else None
@@ -274,6 +300,7 @@ def main() -> None:
         poll_interval=args.interval,
         driver_kwargs=driver_kwargs,
         robot_state_file=robot_state_file,
+        robocasa_action_state_summary=args.robocasa_action_state_summary,
     )
 
 

@@ -69,6 +69,7 @@ VLA、几何动作及其保持步数共享整局动作预算；续跑共享最�
 | `--record-video` / `--no-record-video` | 默认录制 `rollout.mp4`；诊断时可以显式关闭 |
 | `--max-steps` | 覆盖整个 episode 的控制步数预算；默认 driver 配置为 2400 步 |
 | `--max-agent-iterations` | 覆盖每轮主 agent 的工具迭代上限；默认使用 API 配置中的值 |
+| `--action-state-summary` | 默认关闭。开启后，动作结果附带与本次动作对应的 `ROBOT_STATE.md` 状态摘要。需要其他字段时仍可读取完整文件。 |
 | `--max-agent-feedback-rounds` | 主 agent 正常返回但任务未完成时的继续反馈次数，默认 2 |
 | `--ready-timeout-s` | 环境初始化超时，默认 300 秒 |
 | `--episode-timeout-s` | 就绪后的执行超时，默认 2000 秒，续跑不会重置 |
